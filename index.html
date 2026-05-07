@@ -1,0 +1,1924 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Organizador de Puestos</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        /* Estilos base para arrastrar y soltar */
+        [draggable="true"] {
+            cursor: grab;
+        }
+        [draggable="true"]:active {
+            cursor: grabbing;
+        }
+        /* Ocultar barra de desplazamiento manteniendo funcionalidad */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        /* Scrollbar personalizada y sutil para listas horizontales */
+        .custom-scrollbar::-webkit-scrollbar {
+            height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #fcd34d; /* amber-300 */
+            border-radius: 20px;
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col relative overflow-hidden">
+    
+    <!-- Contenedor Principal de la App -->
+    <div id="app" class="h-screen flex flex-col w-full"></div>
+
+    <script type="module">
+        // --- ESTADO GLOBAL DE LA APLICACIÓN ---
+        const App = {
+            state: {
+                // --- APP ---
+                activeTab: 'lista',
+                cols: 8, 
+                colAisles: [], 
+                rowAisles: [], 
+                aisleFrequency: 2,
+                maxAisles: 1,
+                groupFormat: 'individual',
+                editMode: false,
+                hiddenDesks: {}, 
+                students: [],
+                newStudentName: '',
+                importMessage: { text: '', type: '' },
+                isImporting: false,
+                isExporting: false,
+                assignments: {},
+                benchedStudents: new Set(),
+                courseName: '',
+                classDate: new Date().toISOString().split('T')[0],
+                searchTerm: '',
+                restrictionSearchTerm: '',
+                restrictingStudent: null,
+                limitStudent: null,
+                confirmDeleteAll: false,
+                editNameStudent: null,
+                notification: null,
+                showGuide: false
+            },
+
+            // --- INICIALIZACIÓN ---
+            init() {
+                this.render();
+            },
+
+            // --- LÓGICA DE ASIGNACIÓN AUTOMÁTICA ---
+            runAutoAssignment() {
+                const s = this.state;
+                if (s.students.length === 0) {
+                    if (Object.keys(s.assignments).length > 0) {
+                        s.assignments = {};
+                    }
+                    return;
+                }
+
+                const newAssignments = {};
+                const assignedIds = new Set();
+                
+                Object.entries(s.assignments).forEach(([seatId, studentId]) => {
+                    const [ar, ac] = seatId.split('-').map(Number);
+                    const studentExists = s.students.find(st => st.id === studentId);
+                    
+                    if (studentExists && !s.hiddenDesks[seatId] && 
+                        !(s.colAisles && s.colAisles.includes(ac)) && 
+                        !(s.rowAisles && s.rowAisles.includes(ar))) {
+                        newAssignments[seatId] = studentId;
+                        assignedIds.add(studentId);
+                    }
+                });
+
+                const unassignedOnes = s.students.filter(st => !assignedIds.has(st.id) && !s.benchedStudents.has(st.id));
+                const totalGridCols = s.cols + (s.colAisles ? s.colAisles.length : 0);
+                
+                if (unassignedOnes.length > 0 || Object.keys(newAssignments).length !== (s.students.length - s.benchedStudents.size)) {
+                    let studentIdx = 0;
+                    let r = 0;
+                    let seatsFound = 0;
+                    const targetSeats = s.students.length - s.benchedStudents.size;
+
+                    while (seatsFound < targetSeats) {
+                        if (s.rowAisles && s.rowAisles.includes(r)) {
+                            r++;
+                            continue; 
+                        }
+
+                        for (let c = 0; c < totalGridCols; c++) {
+                            if (s.colAisles && s.colAisles.includes(c)) continue;
+
+                            const seatId = `${r}-${c}`;
+                            if (!s.hiddenDesks[seatId]) {
+                                if (!newAssignments[seatId] && studentIdx < unassignedOnes.length) {
+                                    newAssignments[seatId] = unassignedOnes[studentIdx].id;
+                                    studentIdx++;
+                                }
+                                seatsFound++;
+                            }
+                            if (seatsFound >= targetSeats) break;
+                        }
+                        r++;
+                    }
+                    s.assignments = newAssignments;
+                }
+            },
+
+            // --- CALCULOS COMPUTADOS ---
+            getNeighbors(seatId) {
+                const [r, c] = seatId.split('-').map(Number);
+                const neighbors = [];
+                for (let dr = -1; dr <= 1; dr++) {
+                    for (let dc = -1; dc <= 1; dc++) {
+                        if (dr === 0 && dc === 0) continue;
+                        neighbors.push(`${r + dr}-${c + dc}`);
+                    }
+                }
+                return neighbors;
+            },
+
+            getVisualGridMap() {
+                const map = {};
+                let vRow = 0;
+                const totalGridCols = this.state.cols + (this.state.colAisles ? this.state.colAisles.length : 0);
+                
+                for (let r = 0; r < 50; r++) { 
+                    if (this.state.rowAisles && this.state.rowAisles.includes(r)) continue;
+                    let vCol = 0;
+                    for (let c = 0; c < totalGridCols; c++) {
+                        if (this.state.colAisles && this.state.colAisles.includes(c)) continue;
+                        map[`${r}-${c}`] = { vRow, vCol };
+                        vCol++;
+                    }
+                    vRow++;
+                }
+                return map;
+            },
+
+            getGroupMates(seatId, visualMap) {
+                const mates = [];
+                const pos = visualMap[seatId];
+                if (!pos) return mates;
+
+                const format = this.state.groupFormat || 'individual';
+                if (format === 'individual') return mates;
+
+                Object.entries(visualMap).forEach(([otherSeatId, otherPos]) => {
+                    if (otherSeatId === seatId) return;
+                    
+                    if (format === 'pairs') {
+                        if (otherPos.vRow === pos.vRow && Math.floor(otherPos.vCol / 2) === Math.floor(pos.vCol / 2)) {
+                            mates.push(otherSeatId);
+                        }
+                    } else if (format === 'trios') {
+                        if (otherPos.vRow === pos.vRow && Math.floor(otherPos.vCol / 3) === Math.floor(pos.vCol / 3)) {
+                            mates.push(otherSeatId);
+                        }
+                    } else if (format === 'quads') {
+                        if (Math.floor(otherPos.vRow / 2) === Math.floor(pos.vRow / 2) && 
+                            Math.floor(otherPos.vCol / 2) === Math.floor(pos.vCol / 2)) {
+                            mates.push(otherSeatId);
+                        }
+                    }
+                });
+                return mates;
+            },
+
+            getConflicts() {
+                const conflictList = new Set();
+                const visualMap = this.getVisualGridMap();
+
+                Object.entries(this.state.assignments).forEach(([seatId, studentId]) => {
+                    const student = this.state.students.find(s => s.id === studentId);
+                    if (!student || !student.restrictions) return;
+
+                    let restrictions = student.restrictions;
+                    if (Array.isArray(restrictions)) {
+                        restrictions = Object.fromEntries(restrictions.map(id => [id, 'all']));
+                    }
+
+                    const neighbors = this.getNeighbors(seatId);
+                    neighbors.forEach(nId => {
+                        const neighborStudentId = this.state.assignments[nId];
+                        if (neighborStudentId && restrictions[neighborStudentId] === 'all') {
+                            conflictList.add(seatId);
+                            conflictList.add(nId);
+                        }
+                    });
+
+                    const mates = this.getGroupMates(seatId, visualMap);
+                    mates.forEach(mId => {
+                        const mateStudentId = this.state.assignments[mId];
+                        if (mateStudentId && (restrictions[mateStudentId] === 'same' || restrictions[mateStudentId] === 'all')) {
+                            conflictList.add(seatId);
+                            conflictList.add(mId);
+                        }
+                    });
+                });
+                return conflictList;
+            },
+
+            getRowWarnings() {
+                const warningList = new Set();
+                Object.entries(this.state.assignments).forEach(([seatId, studentId]) => {
+                    const student = this.state.students.find(s => s.id === studentId);
+                    if (!student || !student.maxRow) return;
+
+                    const rowIdx = parseInt(seatId.split('-')[0]);
+                    
+                    let visualRow = 1;
+                    for(let i = 0; i < rowIdx; i++) {
+                        if (!this.state.rowAisles || !this.state.rowAisles.includes(i)) {
+                            visualRow++;
+                        }
+                    }
+
+                    if (visualRow > student.maxRow) {
+                        warningList.add(seatId);
+                    }
+                });
+                return warningList;
+            },
+
+            getCalculatedRows() {
+                if (this.state.students.length === 0) return 1;
+                const totalGridCols = this.state.cols + (this.state.colAisles ? this.state.colAisles.length : 0);
+                let count = 0, r = 0;
+                while (count < this.state.students.length) {
+                    if (this.state.rowAisles && this.state.rowAisles.includes(r)) {
+                        r++;
+                        continue;
+                    }
+                    for (let c = 0; c < totalGridCols; c++) {
+                        if (this.state.colAisles && this.state.colAisles.includes(c)) continue;
+
+                        if (!this.state.hiddenDesks[`${r}-${c}`]) count++;
+                        if (count >= this.state.students.length) break;
+                    }
+                    if (count >= this.state.students.length) break;
+                    r++;
+                }
+                return r + 1;
+            },
+
+            // --- EXPORTAR / IMPORTAR PROYECTO (.JSON) ---
+            async handleExportProject() {
+                const exportData = {
+                    cols: this.state.cols,
+                    colAisles: this.state.colAisles,
+                    rowAisles: this.state.rowAisles,
+                    aisleFrequency: this.state.aisleFrequency,
+                    maxAisles: this.state.maxAisles,
+                    groupFormat: this.state.groupFormat,
+                    hiddenDesks: this.state.hiddenDesks,
+                    students: this.state.students,
+                    assignments: this.state.assignments,
+                    benchedStudents: Array.from(this.state.benchedStudents),
+                    courseName: this.state.courseName,
+                    classDate: this.state.classDate
+                };
+                
+                const jsonString = JSON.stringify(exportData, null, 2);
+                const defaultFileName = `Salagrama_${this.state.courseName ? this.state.courseName.replace(/[^a-z0-9]/gi, '_') : 'Guardado'}_${this.state.classDate || new Date().toLocaleDateString()}.json`;
+
+                let savedModernly = false;
+
+                try {
+                    // Intenta usar la API moderna File System Access si está disponible y no está bloqueada por el entorno (ej. iframe)
+                    if (window.showSaveFilePicker) {
+                        const fileHandle = await window.showSaveFilePicker({
+                            suggestedName: defaultFileName,
+                            types: [{
+                                description: 'Archivo de Proyecto Salagrama',
+                                accept: { 'application/json': ['.json'] },
+                            }],
+                        });
+                        const writable = await fileHandle.createWritable();
+                        await writable.write(jsonString);
+                        await writable.close();
+                        this.showNotification("Proyecto guardado correctamente");
+                        savedModernly = true;
+                    }
+                } catch (err) {
+                    // Si el usuario simplemente canceló la ventana modal, no hacemos fallback
+                    if (err.name === 'AbortError') {
+                        return;
+                    }
+                    // Cualquier otro error (como SecurityError en iframes) se loguea y pasa al fallback
+                    console.warn("No se pudo usar la API de guardado moderna (posiblemente por restricciones del navegador). Usando método tradicional...", err);
+                }
+
+                // Fallback automático para iframes (como Canvas) o navegadores sin soporte
+                if (!savedModernly) {
+                    try {
+                        const blob = new Blob([jsonString], { type: "application/json" });
+                        const url = URL.createObjectURL(blob);
+                        
+                        const downloadAnchorNode = document.createElement('a');
+                        downloadAnchorNode.setAttribute("href", url);
+                        downloadAnchorNode.setAttribute("download", defaultFileName);
+                        document.body.appendChild(downloadAnchorNode);
+                        downloadAnchorNode.click();
+                        
+                        setTimeout(() => {
+                            document.body.removeChild(downloadAnchorNode);
+                            URL.revokeObjectURL(url);
+                        }, 100);
+                        
+                        this.showNotification("Proyecto descargado en tu carpeta por defecto");
+                    } catch (fallbackErr) {
+                        console.error("Error crítico al guardar el proyecto:", fallbackErr);
+                        this.showNotification("Error al guardar el archivo", true);
+                    }
+                }
+            },
+
+            handleImportProject(input) {
+                const file = input.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        
+                        if (data.benchedStudents) {
+                            data.benchedStudents = new Set(data.benchedStudents);
+                        } else {
+                            data.benchedStudents = new Set();
+                        }
+
+                        if (data.students) {
+                            data.students = data.students.map(s => {
+                                let newR = {};
+                                if (Array.isArray(s.restrictions)) {
+                                    s.restrictions.forEach(id => newR[id] = 'all');
+                                } else if (s.restrictions) {
+                                    newR = s.restrictions;
+                                }
+                                return { ...s, restrictions: newR };
+                            });
+                        }
+                        
+                        this.updateState({
+                            ...data,
+                            activeTab: this.state.activeTab,
+                            editMode: this.state.editMode,
+                            confirmDeleteAll: false,
+                            restrictingStudent: null,
+                            limitStudent: null,
+                            editNameStudent: null
+                        });
+                        
+                        input.value = '';
+                        this.showNotification("Proyecto cargado correctamente");
+                        
+                    } catch (error) {
+                        console.error("Error al leer el archivo del proyecto:", error);
+                        this.showNotification("Error: Archivo no válido", true);
+                    }
+                };
+                reader.readAsText(file);
+            },
+
+            showNotification(msg, isError = false) {
+                this.updateState({ notification: { text: msg, error: isError } });
+                setTimeout(() => {
+                    if (this.state.notification?.text === msg) {
+                        this.updateState({ notification: null });
+                    }
+                }, 4000);
+            },
+
+            // --- ACCIONES ---
+            updateState(newState) {
+                this.state = { ...this.state, ...newState };
+                this.render();
+            },
+
+            setTab(tab) { this.updateState({ activeTab: tab }); },
+            setCols(val) { 
+                const newCols = Number(val) || 1; 
+                let validAisles = [];
+                let sortedAisles = [...(this.state.colAisles || [])].sort((a,b)=>a-b);
+                
+                for (let i = 0; i < sortedAisles.length; i++) {
+                    const gridIndex = sortedAisles[i];
+                    const desksBefore = gridIndex - i; 
+                    if (desksBefore < newCols) {
+                        validAisles.push(gridIndex);
+                    }
+                }
+                this.updateState({ cols: newCols, colAisles: validAisles }); 
+            },
+            setAisleFreq(val) { this.updateState({ aisleFrequency: Number(val) || 1 }); },
+            setMaxAisles(val) { this.updateState({ maxAisles: Number(val) || 0 }); },
+            setGroupFormat(val) { this.updateState({ groupFormat: val }); },
+            toggleEditMode() { this.updateState({ editMode: !this.state.editMode }); },
+            setCourseName(val) { this.updateState({ courseName: val }); },
+            setClassDate(val) { this.updateState({ classDate: val }); },
+            setSearchTerm(val) { this.updateState({ searchTerm: val }); },
+            setRestrictionSearchTerm(val) { this.updateState({ restrictionSearchTerm: val }); },
+
+            applyAutoAisles() {
+                const newAisles = [];
+                let placed = 0;
+                let absoluteCol = 0;
+
+                for (let desk = 1; desk <= this.state.cols; desk++) {
+                    absoluteCol++; 
+                    if (this.state.aisleFrequency > 0 && 
+                        desk % this.state.aisleFrequency === 0 && 
+                        desk < this.state.cols && 
+                        placed < this.state.maxAisles) {
+                        
+                        newAisles.push(absoluteCol); 
+                        absoluteCol++;
+                        placed++;
+                    }
+                }
+                this.updateState({ colAisles: newAisles });
+            },
+
+            toggleColAisle(gridIndex) {
+                if (!this.state.editMode) return;
+                let newAisles = [...(this.state.colAisles || [])];
+                let newAssignments = { ...this.state.assignments };
+                let newHiddenDesks = { ...this.state.hiddenDesks };
+                
+                if (newAisles.includes(gridIndex)) {
+                    newAisles = newAisles.filter(c => c !== gridIndex);
+                    newAisles = newAisles.map(c => c > gridIndex ? c - 1 : c);
+                    
+                    const updatedAssignments = {};
+                    Object.entries(newAssignments).forEach(([seatId, studentId]) => {
+                        const [r, c] = seatId.split('-').map(Number);
+                        if (c > gridIndex) updatedAssignments[`${r}-${c - 1}`] = studentId;
+                        else if (c < gridIndex) updatedAssignments[seatId] = studentId;
+                    });
+                    newAssignments = updatedAssignments;
+
+                    const updatedHidden = {};
+                    Object.entries(newHiddenDesks).forEach(([seatId, val]) => {
+                        const [r, c] = seatId.split('-').map(Number);
+                        if (c > gridIndex) updatedHidden[`${r}-${c - 1}`] = val;
+                        else if (c < gridIndex) updatedHidden[seatId] = val;
+                    });
+                    newHiddenDesks = updatedHidden;
+                } else {
+                    newAisles = newAisles.map(c => c >= gridIndex ? c + 1 : c);
+                    newAisles.push(gridIndex);
+                    
+                    const updatedAssignments = {};
+                    Object.entries(newAssignments).forEach(([seatId, studentId]) => {
+                        const [r, c] = seatId.split('-').map(Number);
+                        if (c >= gridIndex) updatedAssignments[`${r}-${c + 1}`] = studentId;
+                        else updatedAssignments[seatId] = studentId;
+                    });
+                    newAssignments = updatedAssignments;
+
+                    const updatedHidden = {};
+                    Object.entries(newHiddenDesks).forEach(([seatId, val]) => {
+                        const [r, c] = seatId.split('-').map(Number);
+                        if (c >= gridIndex) updatedHidden[`${r}-${c + 1}`] = val;
+                        else updatedHidden[seatId] = val;
+                    });
+                    newHiddenDesks = updatedHidden;
+                }
+                this.updateState({ colAisles: newAisles, assignments: newAssignments, hiddenDesks: newHiddenDesks });
+            },
+
+            toggleRowAisle(gridIndex) {
+                if (!this.state.editMode) return;
+                let newAisles = [...(this.state.rowAisles || [])];
+                let newAssignments = { ...this.state.assignments };
+                let newHiddenDesks = { ...this.state.hiddenDesks };
+
+                if (newAisles.includes(gridIndex)) {
+                    newAisles = newAisles.filter(r => r !== gridIndex);
+                    newAisles = newAisles.map(r => r > gridIndex ? r - 1 : r);
+
+                    const updatedAssignments = {};
+                    Object.entries(newAssignments).forEach(([seatId, studentId]) => {
+                        const [r, c] = seatId.split('-').map(Number);
+                        if (r > gridIndex) updatedAssignments[`${r - 1}-${c}`] = studentId;
+                        else if (r < gridIndex) updatedAssignments[seatId] = studentId;
+                    });
+                    newAssignments = updatedAssignments;
+
+                    const updatedHidden = {};
+                    Object.entries(newHiddenDesks).forEach(([seatId, val]) => {
+                        const [r, c] = seatId.split('-').map(Number);
+                        if (r > gridIndex) updatedHidden[`${r - 1}-${c}`] = val;
+                        else if (r < gridIndex) updatedHidden[seatId] = val;
+                    });
+                    newHiddenDesks = updatedHidden;
+
+                } else {
+                    newAisles = newAisles.map(r => r >= gridIndex ? r + 1 : r);
+                    newAisles.push(gridIndex);
+
+                    const updatedAssignments = {};
+                    Object.entries(newAssignments).forEach(([seatId, studentId]) => {
+                        const [r, c] = seatId.split('-').map(Number);
+                        if (r >= gridIndex) updatedAssignments[`${r + 1}-${c}`] = studentId;
+                        else updatedAssignments[seatId] = studentId;
+                    });
+                    newAssignments = updatedAssignments;
+
+                    const updatedHidden = {};
+                    Object.entries(newHiddenDesks).forEach(([seatId, val]) => {
+                        const [r, c] = seatId.split('-').map(Number);
+                        if (r >= gridIndex) updatedHidden[`${r + 1}-${c}`] = val;
+                        else updatedHidden[seatId] = val;
+                    });
+                    newHiddenDesks = updatedHidden;
+                }
+                
+                this.updateState({ rowAisles: newAisles, assignments: newAssignments, hiddenDesks: newHiddenDesks });
+            },
+
+            toggleDeskVisibility(seatId) {
+                if (!this.state.editMode) return;
+                const newHidden = { ...this.state.hiddenDesks };
+                if (newHidden[seatId]) delete newHidden[seatId];
+                else newHidden[seatId] = true;
+                this.updateState({ hiddenDesks: newHidden });
+            },
+
+            hideEmptyDesks() {
+                const newHidden = { ...this.state.hiddenDesks };
+                const totalGridCols = this.state.cols + (this.state.colAisles ? this.state.colAisles.length : 0);
+                
+                let maxAssignedRow = 0;
+                Object.keys(this.state.assignments).forEach(sId => {
+                    const r = parseInt(sId.split('-')[0]);
+                    if (r > maxAssignedRow) maxAssignedRow = r;
+                });
+
+                const rowsToScan = Math.max(maxAssignedRow, this.getCalculatedRows()) + 2;
+
+                for (let r = 0; r < rowsToScan; r++) {
+                    if (this.state.rowAisles && this.state.rowAisles.includes(r)) continue;
+                    for (let c = 0; c < totalGridCols; c++) {
+                        if (this.state.colAisles && this.state.colAisles.includes(c)) continue;
+                        const sId = `${r}-${c}`;
+                        
+                        if (!this.state.assignments[sId]) {
+                            newHidden[sId] = true;
+                        }
+                    }
+                }
+                
+                this.updateState({ hiddenDesks: newHidden });
+                this.showNotification("Puestos vacíos ocultados");
+            },
+
+            showAllDesks() {
+                this.updateState({ hiddenDesks: {} });
+                this.showNotification("Todos los puestos restaurados");
+            },
+
+            handleAddStudent(e) {
+                e.preventDefault();
+                const nameInput = document.getElementById('newStudentName').value;
+                if (!nameInput.trim()) return;
+                const newS = { id: Date.now().toString(), name: nameInput.trim(), restrictions: {}, maxRow: null };
+                this.updateState({ 
+                    students: [...this.state.students, newS],
+                    newStudentName: '' 
+                });
+            },
+
+            handleRemoveStudent(studentId) {
+                const newBenched = new Set(this.state.benchedStudents);
+                newBenched.delete(studentId);
+                
+                const newAssignments = { ...this.state.assignments };
+                Object.keys(newAssignments).forEach(seatId => {
+                    if (newAssignments[seatId] === studentId) delete newAssignments[seatId];
+                });
+
+                this.updateState({
+                    students: this.state.students.filter(s => s.id !== studentId),
+                    benchedStudents: newBenched,
+                    assignments: newAssignments
+                });
+            },
+
+            handleDeleteAll() {
+                this.updateState({ confirmDeleteAll: true });
+            },
+
+            cancelDeleteAll() {
+                this.updateState({ confirmDeleteAll: false });
+            },
+
+            confirmDeleteAllStudents() {
+                this.updateState({
+                    students: [],
+                    assignments: {},
+                    benchedStudents: new Set(),
+                    confirmDeleteAll: false
+                });
+            },
+
+            openEditNameModal(studentId) {
+                const student = this.state.students.find(s => s.id === studentId);
+                this.updateState({ editNameStudent: { ...student } });
+                setTimeout(() => {
+                    const input = document.getElementById('editStudentNameInput');
+                    if (input) {
+                        input.focus();
+                        input.select();
+                    }
+                }, 10);
+            },
+
+            closeEditNameModal() {
+                this.updateState({ editNameStudent: null });
+            },
+
+            saveStudentName(e) {
+                e.preventDefault();
+                const newName = document.getElementById('editStudentNameInput').value.trim();
+                if (!newName) return;
+
+                const studentId = this.state.editNameStudent.id;
+                const updatedStudents = this.state.students.map(s =>
+                    s.id === studentId ? { ...s, name: newName } : s
+                );
+
+                this.updateState({
+                    students: updatedStudents,
+                    editNameStudent: null
+                });
+            },
+
+            openRestrictionModal(studentId) {
+                const student = this.state.students.find(s => s.id === studentId);
+                this.updateState({ restrictingStudent: student, restrictionSearchTerm: '' });
+            },
+
+            closeRestrictionModal() {
+                this.updateState({ restrictingStudent: null });
+            },
+
+            setRestriction(targetId, type) {
+                const sourceId = this.state.restrictingStudent.id;
+                const newStudents = this.state.students.map(s => {
+                    if (s.id === sourceId) {
+                        let newR = Array.isArray(s.restrictions) ? 
+                            Object.fromEntries(s.restrictions.map(id => [id, 'all'])) : 
+                            { ...(s.restrictions || {}) };
+                        
+                        if (type === null) delete newR[targetId];
+                        else newR[targetId] = type;
+                        
+                        return { ...s, restrictions: newR };
+                    }
+                    if (s.id === targetId) {
+                        let newR = Array.isArray(s.restrictions) ? 
+                            Object.fromEntries(s.restrictions.map(id => [id, 'all'])) : 
+                            { ...(s.restrictions || {}) };
+                        
+                        if (type === null) delete newR[sourceId];
+                        else newR[sourceId] = type;
+                        
+                        return { ...s, restrictions: newR };
+                    }
+                    return s;
+                });
+                
+                this.updateState({ 
+                    students: newStudents,
+                    restrictingStudent: newStudents.find(s => s.id === sourceId) 
+                });
+            },
+
+            openLimitModal(studentId) {
+                const student = this.state.students.find(s => s.id === studentId);
+                this.updateState({ limitStudent: student });
+            },
+
+            updateStudentMaxRow(rowValue) {
+                const studentId = this.state.limitStudent.id;
+                this.updateState({
+                    students: this.state.students.map(s => s.id === studentId ? { ...s, maxRow: rowValue } : s),
+                    limitStudent: null
+                });
+            },
+
+            // --- DRAG AND DROP ---
+            handleDragStart(e, studentId, sourceSeatId) {
+                e.dataTransfer.setData('studentId', studentId);
+                e.dataTransfer.setData('sourceSeatId', sourceSeatId || '');
+            },
+
+            handleDropOnSeat(e, targetSeatId) {
+                e.preventDefault();
+                const tr = Number(targetSeatId.split('-')[0]);
+                const tc = Number(targetSeatId.split('-')[1]);
+                
+                if (this.state.hiddenDesks[targetSeatId] || 
+                    (this.state.colAisles && this.state.colAisles.includes(tc)) || 
+                    (this.state.rowAisles && this.state.rowAisles.includes(tr))) return;
+                
+                const studentId = e.dataTransfer.getData('studentId');
+                const sourceSeatId = e.dataTransfer.getData('sourceSeatId');
+                if (sourceSeatId === targetSeatId) return;
+
+                const newAssignments = { ...this.state.assignments };
+                const targetStudentId = newAssignments[targetSeatId];
+                
+                // No permitir soltar sobre un estudiante bloqueado
+                if (targetStudentId) {
+                    const targetStudent = this.state.students.find(s => s.id === targetStudentId);
+                    if (targetStudent && targetStudent.isLocked) return;
+                }
+                
+                newAssignments[targetSeatId] = studentId;
+                const newBenched = new Set(this.state.benchedStudents);
+                
+                if (sourceSeatId) {
+                    if (targetStudentId) newAssignments[sourceSeatId] = targetStudentId;
+                    else delete newAssignments[sourceSeatId];
+                } else {
+                    newBenched.delete(studentId);
+                    if (targetStudentId) newBenched.add(targetStudentId);
+                }
+                
+                this.updateState({ assignments: newAssignments, benchedStudents: newBenched });
+            },
+
+            handleUnassignStudent(e, seatId, studentId) {
+                e.stopPropagation();
+                const newBenched = new Set(this.state.benchedStudents);
+                newBenched.add(studentId);
+                
+                const newAssignments = { ...this.state.assignments };
+                delete newAssignments[seatId];
+                
+                const newStudents = this.state.students.map(s => 
+                    s.id === studentId ? { ...s, isLocked: false } : s
+                );
+                
+                this.updateState({ benchedStudents: newBenched, assignments: newAssignments, students: newStudents });
+            },
+
+            toggleLockStudent(e, studentId) {
+                e.stopPropagation();
+                const newStudents = this.state.students.map(s => 
+                    s.id === studentId ? { ...s, isLocked: !s.isLocked } : s
+                );
+                this.updateState({ students: newStudents });
+            },
+
+            handleRandomize() {
+                this.state.benchedStudents = new Set();
+                const totalGridCols = this.state.cols + (this.state.colAisles ? this.state.colAisles.length : 0);
+                const rows = this.getCalculatedRows();
+                const visualMap = this.getVisualGridMap();
+
+                // Identificar a los estudiantes bloqueados y guardarlos
+                const lockedAssignments = {};
+                const lockedStudentIds = new Set();
+                const lockedSeats = new Set();
+
+                Object.entries(this.state.assignments).forEach(([seatId, studentId]) => {
+                    const student = this.state.students.find(s => s.id === studentId);
+                    if (student && student.isLocked && !this.state.hiddenDesks[seatId]) {
+                        lockedAssignments[seatId] = studentId;
+                        lockedStudentIds.add(studentId);
+                        lockedSeats.add(seatId);
+                    }
+                });
+
+                const availableSeats = [];
+                for (let r = 0; r < rows; r++) {
+                    if (this.state.rowAisles && this.state.rowAisles.includes(r)) continue;
+                    for (let c = 0; c < totalGridCols; c++) {
+                        if (this.state.colAisles && this.state.colAisles.includes(c)) continue;
+                        if (!this.state.hiddenDesks[`${r}-${c}`] && !lockedSeats.has(`${r}-${c}`)) {
+                            availableSeats.push(`${r}-${c}`);
+                        }
+                    }
+                }
+                
+                const studentsToPlace = this.state.students.filter(s => !lockedStudentIds.has(s.id));
+                const seatsToFill = availableSeats.slice(0, studentsToPlace.length);
+                
+                let bestAssignment = null;
+                let minScore = Infinity;
+
+                for (let attempt = 0; attempt < 500; attempt++) {
+                    const currentAssign = { ...lockedAssignments };
+                    const shuffledSeats = [...seatsToFill].sort(() => Math.random() - 0.5);
+                    const shuffledStudents = [...studentsToPlace].sort(() => Math.random() - 0.5);
+                    
+                    shuffledStudents.forEach((s, i) => { 
+                        if (shuffledSeats[i]) currentAssign[shuffledSeats[i]] = s.id; 
+                    });
+
+                    let currentPenalty = 0;
+                    Object.entries(currentAssign).forEach(([seatId, sId]) => {
+                        const student = this.state.students.find(st => st.id === sId);
+                        if (!student) return;
+
+                        let restrictions = student.restrictions || {};
+                        if (Array.isArray(restrictions)) {
+                            restrictions = Object.fromEntries(restrictions.map(id => [id, 'all']));
+                        }
+
+                        this.getNeighbors(seatId).forEach(nId => {
+                            const neighborStudentId = currentAssign[nId];
+                            if (neighborStudentId && restrictions[neighborStudentId] === 'all') {
+                                currentPenalty += 100;
+                            }
+                        });
+
+                        this.getGroupMates(seatId, visualMap).forEach(mId => {
+                            const mateStudentId = currentAssign[mId];
+                            if (mateStudentId && (restrictions[mateStudentId] === 'same' || restrictions[mateStudentId] === 'all')) {
+                                currentPenalty += 100;
+                            }
+                        });
+
+                        if (student.maxRow) {
+                            const rowIdx = parseInt(seatId.split('-')[0]);
+                            let visualRow = 1;
+                            for(let i=0; i<rowIdx; i++) {
+                                if (!this.state.rowAisles || !this.state.rowAisles.includes(i)) visualRow++;
+                            }
+                            if (visualRow > student.maxRow) currentPenalty += 50;
+                        }
+                    });
+
+                    if (currentPenalty === 0) {
+                        bestAssignment = currentAssign;
+                        break;
+                    }
+                    if (currentPenalty < minScore) {
+                        minScore = currentPenalty;
+                        bestAssignment = currentAssign;
+                    }
+                }
+                this.updateState({ assignments: bestAssignment || lockedAssignments });
+            },
+
+            async handleFileUpload(input) {
+                const file = input.files[0];
+                if (!file) return;
+                this.updateState({ isImporting: true });
+                
+                try {
+                    let XLSX = window.XLSX;
+                    if (!XLSX) {
+                        await new Promise((res, rej) => {
+                            const s = document.createElement('script');
+                            s.src = 'https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js';
+                            s.onload = res; s.onerror = rej; document.head.appendChild(s);
+                        });
+                        XLSX = window.XLSX;
+                    }
+                    
+                    const reader = new FileReader();
+                    reader.onload = (evt) => {
+                        try {
+                            const data = new Uint8Array(evt.target.result);
+                            const wb = XLSX.read(data, { type: 'array' });
+                            const ws = wb.Sheets[wb.SheetNames[0]];
+                            
+                            // Extraer los datos en forma de matriz cruda
+                            const json = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+                            
+                            // Filtrar filas completamente vacías
+                            const rows = json.filter(row => row.some(cell => String(cell).trim() !== ''));
+                            if (rows.length === 0) throw new Error("Archivo vacío");
+
+                            // Estrategia de búsqueda de cabeceras
+                            let headerRowIndex = 0;
+                            let headers = rows[0].map(h => String(h).trim().toUpperCase());
+                            
+                            // Si la primera fila no tiene nada reconocible, revisar la segunda (por si hay un título encima)
+                            if (!headers.some(h => h.includes('NOMBRE') || h.includes('APELLIDO') || h.includes('ALUMNO') || h.includes('ESTUDIANTE'))) {
+                                if (rows.length > 1) {
+                                    const h2 = rows[1].map(h => String(h).trim().toUpperCase());
+                                    if (h2.some(h => h.includes('NOMBRE') || h.includes('APELLIDO') || h.includes('ALUMNO') || h.includes('ESTUDIANTE'))) {
+                                        headers = h2;
+                                        headerRowIndex = 1;
+                                    }
+                                }
+                            }
+
+                            // Detectar índices automáticamente
+                            let nIdx = headers.findIndex(h => h === 'NOMBRE' || h === 'NOMBRES');
+                            let aIdx = headers.findIndex(h => h.includes('APELLIDO PATERNO') || h === 'APELLIDO' || h === 'APELLIDOS');
+                            let fullNameIdx = headers.findIndex(h => h === 'ESTUDIANTE' || h === 'ALUMNO' || h.includes('NOMBRE COMPLETO'));
+
+                            // Si no hay cabeceras reconocibles, deducir la columna principal adivinando qué columna tiene texto válido
+                            if (nIdx === -1 && fullNameIdx === -1 && aIdx === -1) {
+                                const dataRow = rows[headerRowIndex + 1] || rows[headerRowIndex];
+                                for (let c = 0; c < dataRow.length; c++) {
+                                    const cellVal = String(dataRow[c]).trim();
+                                    // Asume que la columna con cadenas de texto > 4 caracteres es el nombre
+                                    if (cellVal.length > 4 && isNaN(cellVal)) {
+                                        fullNameIdx = c;
+                                        break;
+                                    }
+                                }
+                                // Si adivinó la columna, no ignorar la primera fila
+                                if (fullNameIdx !== -1) headerRowIndex = -1; 
+                            }
+
+                            const newS = [];
+                            
+                            for (let i = headerRowIndex + 1; i < rows.length; i++) {
+                                const row = rows[i];
+                                let finalName = '';
+
+                                // CASO A: Columnas separadas (Nombres / Apellidos)
+                                if (nIdx !== -1 && aIdx !== -1 && row[nIdx] && row[aIdx]) {
+                                    const namePart = String(row[nIdx]).trim().split(' ')[0]; 
+                                    const lastNamePart = String(row[aIdx]).trim().split(' ')[0]; 
+                                    finalName = `${namePart} ${lastNamePart}`;
+                                } 
+                                // CASO B: Encontramos solo columna de nombres (sin apellidos formales)
+                                else if (nIdx !== -1 && row[nIdx] && aIdx === -1) {
+                                    finalName = String(row[nIdx]);
+                                }
+                                // CASO C: Encontramos la columna universal (Ej. "Estudiante" o adivinada)
+                                else if (fullNameIdx !== -1 && row[fullNameIdx]) {
+                                    finalName = String(row[fullNameIdx]);
+                                }
+
+                                // PROCESAMIENTO INTELIGENTE DEL NOMBRE
+                                if (finalName) {
+                                    let s = finalName.trim();
+                                    
+                                    // Ignorar filas basura/errores de Excel
+                                    if (!s || s.toUpperCase().includes('NOMBRE') || s.toUpperCase().includes('ALUMNO') || s.includes('#VALUE!')) continue;
+
+                                    if (s.includes(',')) {
+                                        // Viene como "Apellidos, Nombres" -> lo damos vuelta y acortamos
+                                        const parts = s.split(',');
+                                        const apellidos = parts[0].trim().split(' ')[0];
+                                        const nombres = parts[1].trim().split(' ')[0];
+                                        finalName = `${nombres} ${apellidos}`;
+                                    } else {
+                                        // Viene sin comas. Simplificamos a un máximo de dos palabras para la visual.
+                                        const words = s.split(/\s+/).filter(w => w.length > 1);
+                                        if (words.length === 1) finalName = words[0];
+                                        else if (words.length === 2) finalName = `${words[0]} ${words[1]}`;
+                                        else if (words.length === 3) finalName = `${words[0]} ${words[1]}`; // Asume Juan Perez Soto -> Juan Perez
+                                        else if (words.length >= 4) finalName = `${words[0]} ${words[2]}`; // Asume Juan Pablo Perez Soto -> Juan Perez
+                                        else finalName = s;
+                                    }
+
+                                    // Capitalización correcta (MAYÚSCULAS -> Nombre Propio)
+                                    finalName = finalName.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+                                    
+                                    newS.push({ id: Math.random().toString(36).substr(2, 9), name: finalName, restrictions: {}, maxRow: null });
+                                }
+                            }
+
+                            if (newS.length === 0) {
+                                this.updateState({ importMessage: { text: 'No se detectaron nombres', type: 'error' }, isImporting: false });
+                                setTimeout(() => { this.updateState({ importMessage: { text: '', type: '' } }); }, 4000);
+                                return;
+                            }
+
+                            this.updateState({ 
+                                students: [...this.state.students, ...newS],
+                                importMessage: { text: `¡${newS.length} estudiantes detectados!`, type: 'success' },
+                                isImporting: false
+                            });
+                        } catch (e) { 
+                            console.error(e);
+                            this.updateState({ importMessage: { text: 'Error procesando archivo', type: 'error' }, isImporting: false }); 
+                        }
+                        
+                        setTimeout(() => {
+                            this.state.importMessage = { text: '', type: '' };
+                            this.render();
+                        }, 4000);
+                    };
+                    reader.readAsArrayBuffer(file);
+                } catch (err) { 
+                    this.updateState({ isImporting: false }); 
+                }
+            },
+
+            async handleDownloadTemplate() {
+                try {
+                    let XLSX = window.XLSX;
+                    if (!XLSX) {
+                        await new Promise((res, rej) => {
+                            const s = document.createElement('script');
+                            s.src = 'https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js';
+                            s.onload = res; s.onerror = rej; document.head.appendChild(s);
+                        });
+                        XLSX = window.XLSX;
+                    }
+                    
+                    const ws_data = [
+                        ['PEGA AQUI TU LISTA DE ESTUDIANTES ', 'APELLIDO PATERNO', 'APELLIDO MATERNO', 'NOMBRE', 'SEGUNDO NOMBRE'],
+                        ...Array.from({length: 45}, () => ['', '', '', '', '']) 
+                    ];
+                    
+                    const ws = XLSX.utils.aoa_to_sheet(ws_data);
+                    ws['!cols'] = [
+                        { wch: 40 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }
+                    ];
+
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, "Hoja 1");
+                    
+                    XLSX.writeFile(wb, "PLANTILLA_PARA_LISTA_SALAGRAMA.xlsx");
+                    
+                } catch (error) {
+                    console.error("Error al generar plantilla:", error);
+                    this.updateState({ importMessage: { text: 'Error al descargar plantilla', type: 'error' } });
+                    setTimeout(() => {
+                        this.state.importMessage = { text: '', type: '' };
+                        this.render();
+                    }, 4000);
+                }
+            },
+
+            async handleDownloadPDF() {
+                this.updateState({ isExporting: true });
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                const element = document.getElementById('salagrama-map');
+                if (!element) {
+                    this.updateState({ isExporting: false });
+                    return;
+                }
+
+                try {
+                    if (!window.html2canvas) {
+                        await new Promise((resolve) => {
+                            const script = document.createElement('script');
+                            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+                            script.onload = resolve;
+                            document.head.appendChild(script);
+                        });
+                    }
+                    if (!window.jspdf) {
+                        await new Promise((resolve) => {
+                            const script = document.createElement('script');
+                            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+                            script.onload = resolve;
+                            document.head.appendChild(script);
+                        });
+                    }
+
+                    const { jsPDF } = window.jspdf;
+                    
+                    const canvas = await window.html2canvas(element, {
+                        scale: 2,
+                        useCORS: true,
+                        backgroundColor: '#f8fafc',
+                        windowWidth: element.scrollWidth,
+                        windowHeight: element.scrollHeight
+                    });
+
+                    const imgData = canvas.toDataURL('image/png');
+                    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+                    const imgProps = pdf.getImageProperties(imgData);
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+
+                    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+                    
+                    const fileName = `Salagrama_${this.state.courseName ? this.state.courseName.replace(/[^a-z0-9]/gi, '_') : 'Clase'}_${this.state.classDate || new Date().toLocaleDateString()}.pdf`;
+                    pdf.save(fileName);
+
+                } catch (error) {
+                    console.error('Error generando PDF:', error);
+                } finally {
+                    this.updateState({ isExporting: false });
+                }
+            },
+
+            // --- RENDERIZADO HTML ---
+            render() {
+                const appDiv = document.getElementById('app');
+
+                // Capturar posiciones de scroll antes de renderizar
+                // SE HA AÑADIDO 'restriction-list-container' PARA MANTENER LA POSICIÓN DEL SCROLL DEL MODAL
+                const scrollableElements = ['lista-scroll-container', 'sidebar-scroll-container', 'map-scroll-container', 'restriction-list-container'];
+                const scrollPositions = {};
+                scrollableElements.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) scrollPositions[id] = { top: el.scrollTop, left: el.scrollLeft };
+                });
+
+                // NUEVO: Capturar el elemento activo y posición del cursor
+                const activeElementId = document.activeElement ? document.activeElement.id : null;
+                let selectionStart = null;
+                let selectionEnd = null;
+                if (activeElementId && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+                    try {
+                        selectionStart = document.activeElement.selectionStart;
+                        selectionEnd = document.activeElement.selectionEnd;
+                    } catch (e) {
+                        // Algunos inputs como 'number' no soportan setSelectionRange
+                    }
+                }
+
+                this.runAutoAssignment();
+                
+                let html = `
+                    ${this.state.notification ? `
+                        <div class="fixed top-4 right-4 ${this.state.notification.error ? 'bg-red-600' : 'bg-emerald-600'} text-white px-5 py-3 rounded-xl shadow-2xl z-[100] flex items-center gap-3 animate-bounce">
+                            <i data-lucide="${this.state.notification.error ? 'alert-circle' : 'check-circle'}" class="w-5 h-5"></i>
+                            <span class="text-sm font-bold">${this.state.notification.text}</span>
+                        </div>
+                    ` : ''}
+                    ${this.renderModals()}
+                    ${this.renderNav()}
+                    <div class="flex-1 overflow-hidden flex flex-col md:flex-row">
+                        ${this.state.activeTab === 'salagrama' ? this.renderSalagrama() : this.renderLista()}
+                    </div>
+                `;
+                
+                appDiv.innerHTML = html;
+                lucide.createIcons();
+
+                // Restaurar posiciones de scroll
+                scrollableElements.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el && scrollPositions[id]) {
+                        el.scrollTop = scrollPositions[id].top;
+                        el.scrollLeft = scrollPositions[id].left;
+                    }
+                });
+
+                // NUEVO: Restaurar el foco y el cursor al input exacto en el que estábamos escribiendo
+                if (activeElementId) {
+                    const el = document.getElementById(activeElementId);
+                    if (el) {
+                        el.focus();
+                        if (selectionStart !== null && selectionEnd !== null) {
+                            try {
+                                el.setSelectionRange(selectionStart, selectionEnd);
+                            } catch (e) {
+                                // Fallback seguro
+                            }
+                        }
+                    }
+                }
+            },
+
+            renderNav() {
+                return `
+                    <div class="bg-white border-b border-slate-200 flex items-center px-4 sm:px-6 h-16 shrink-0 gap-4 shadow-sm z-10 overflow-x-auto">
+                        <div class="flex items-center gap-2 mr-4 text-indigo-700 font-bold shrink-0">
+                            <i data-lucide="grid-2x2" class="w-6 h-6"></i>
+                            <span class="hidden sm:inline">Gestor de Sala</span>
+                        </div>
+                        <button onclick="App.setTab('lista')" class="flex items-center gap-2 px-4 py-2 rounded-lg font-medium shrink-0 transition-colors ${this.state.activeTab === 'lista' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}">
+                            <i data-lucide="users" class="w-[18px] h-[18px]"></i> Lista
+                        </button>
+                        <button onclick="App.setTab('salagrama')" class="flex items-center gap-2 px-4 py-2 rounded-lg font-medium shrink-0 transition-colors ${this.state.activeTab === 'salagrama' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}">
+                            <i data-lucide="layout-dashboard" class="w-[18px] h-[18px]"></i> Salagrama
+                        </button>
+                        
+                        <div class="flex-1 flex justify-end items-center gap-2 sm:gap-4">
+                            <button onclick="App.updateState({showGuide: true})" class="flex items-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-bold text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Ver guía de uso">
+                                <i data-lucide="help-circle" class="w-5 h-5"></i> <span class="hidden md:inline">Guía</span>
+                            </button>
+                            <div class="w-px h-6 bg-slate-200 hidden sm:block"></div>
+                            <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-bold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all border border-slate-200 shadow-sm" title="Cargar un salagrama guardado anteriormente">
+                                <i data-lucide="folder-open" class="w-4 h-4"></i> <span class="hidden md:inline">Abrir</span>
+                                <input type="file" accept=".json" class="hidden" onchange="App.handleImportProject(this)" />
+                            </label>
+                            <button onclick="App.handleExportProject()" class="flex items-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-all shadow-sm" title="Guardar toda la configuración y estudiantes en un archivo">
+                                <i data-lucide="save" class="w-4 h-4"></i> <span class="hidden md:inline">Guardar</span>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            },
+
+            renderModals() {
+                let html = '';
+
+                if (this.state.showGuide) {
+                    html += `
+                        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+                            <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl flex flex-col max-h-[90vh] overflow-hidden transform transition-all">
+                                <div class="p-6 bg-indigo-600 text-white flex justify-between items-center shrink-0">
+                                    <div>
+                                        <h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="book-open" class="w-6 h-6"></i> Guía Rápida de Uso</h3>
+                                        <p class="text-indigo-100 text-sm">Aprende a usar el Organizador en 5 sencillos pasos</p>
+                                    </div>
+                                    <button onclick="App.updateState({showGuide: false})" class="p-2 hover:bg-white/10 rounded-full transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
+                                </div>
+                                <div class="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4 sm:space-y-6 bg-slate-50 custom-scrollbar">
+                                    
+                                    <!-- Paso 1 -->
+                                    <div class="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex gap-4">
+                                        <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0 font-black text-base sm:text-lg">1</div>
+                                        <div>
+                                            <h4 class="font-bold text-slate-800 text-base sm:text-lg mb-1">Prepara tu Lista (Pestaña Lista)</h4>
+                                            <p class="text-xs sm:text-sm text-slate-600 mb-3">Agrega a tus estudiantes manualmente o importa tu lista desde un archivo Excel/CSV. Si un estudiante tiene necesidades particulares, usa:</p>
+                                            <ul class="text-xs sm:text-sm text-slate-500 space-y-2">
+                                                <li class="flex items-start gap-2"><i data-lucide="user-x" class="w-4 h-4 text-red-500 shrink-0 mt-0.5"></i> <span><b>Restricciones:</b> Selecciona con qué compañeros NO debe sentarse.</span></li>
+                                                <li class="flex items-start gap-2"><i data-lucide="arrow-down-to-line" class="w-4 h-4 text-amber-500 shrink-0 mt-0.5"></i> <span><b>Límite de fila:</b> Fija hasta qué fila máxima puede sentarse (ideal para problemas visuales o de atención).</span></li>
+                                            </ul>
+                                        </div>
+                                    </div>
+
+                                    <!-- Paso 2 -->
+                                    <div class="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex gap-4">
+                                        <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0 font-black text-base sm:text-lg">2</div>
+                                        <div>
+                                            <h4 class="font-bold text-slate-800 text-base sm:text-lg mb-1">Diseña la Sala (Barra lateral del Salagrama)</h4>
+                                            <p class="text-xs sm:text-sm text-slate-600">Configura la forma de tu aula usando el panel lateral izquierdo:</p>
+                                            <ul class="text-xs sm:text-sm text-slate-500 space-y-1.5 mt-2 list-disc ml-5">
+                                                <li><b>Ancho de sala:</b> ¿Cuántas mesas reales hay de lado a lado?</li>
+                                                <li><b>Pasillos automáticos:</b> Añade separaciones rápidamente.</li>
+                                                <li><b>Formato de mesas:</b> Define si las mesas están pegadas en parejas, tríos o grupos de a cuatro.</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+
+                                    <!-- Paso 3 -->
+                                    <div class="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex gap-4">
+                                        <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 font-black text-base sm:text-lg">3</div>
+                                        <div>
+                                            <h4 class="font-bold text-slate-800 text-base sm:text-lg mb-1">Ajustes Manuales de Mapa (Opcional)</h4>
+                                            <p class="text-xs sm:text-sm text-slate-600">Si tu sala tiene una forma irregular (ej. falta una mesa en una esquina), activa el interruptor de <b>"Edición de Mapa"</b>. Luego haz clic en cualquier mesa del mapa para ocultarla. También puedes añadir pasillos fila por fila usando los controles que aparecerán alrededor del mapa.</p>
+                                        </div>
+                                    </div>
+
+                                    <!-- Paso 4 -->
+                                    <div class="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex gap-4">
+                                        <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shrink-0 font-black text-base sm:text-lg">4</div>
+                                        <div>
+                                            <h4 class="font-bold text-slate-800 text-base sm:text-lg mb-1">Mezcla Inteligente y Retoques</h4>
+                                            <p class="text-xs sm:text-sm text-slate-600 mb-2">Haz clic en el botón morado <b>"Mezcla Inteligente"</b>. El sistema buscará automáticamente la mejor distribución respetando las reglas de tus alumnos.</p>
+                                            <ul class="text-xs sm:text-sm text-slate-500 space-y-2">
+                                                <li class="flex items-start gap-2"><i data-lucide="grip-vertical" class="w-4 h-4 text-slate-400 shrink-0 mt-0.5"></i> <span>Arrastra a cualquier estudiante en el mapa para cambiarlo de puesto manualmente.</span></li>
+                                                <li class="flex items-start gap-2"><i data-lucide="lock" class="w-4 h-4 text-slate-400 shrink-0 mt-0.5"></i> <span>Usa el icono del <b>candado</b> en el escritorio de un alumno para fijarlo. Así, la próxima vez que uses la Mezcla Inteligente, él no se moverá.</span></li>
+                                            </ul>
+                                        </div>
+                                    </div>
+
+                                    <!-- Paso 5 -->
+                                    <div class="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex gap-4">
+                                        <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center shrink-0 font-black text-base sm:text-lg">5</div>
+                                        <div>
+                                            <h4 class="font-bold text-slate-800 text-base sm:text-lg mb-1">Exportar y Guardar</h4>
+                                            <p class="text-xs sm:text-sm text-slate-600">Cuando termines, usa <b>"Descargar PDF"</b> para tener tu mapa listo para imprimir. Es muy importante que uses el botón <b>"Guardar"</b> de la barra superior para guardar toda tu clase en un archivo que podrás <b>"Abrir"</b> otro día o compartir con otro profesor.</p>
+                                        </div>
+                                    </div>
+
+                                </div>
+                                <div class="p-4 bg-white border-t border-slate-200 flex justify-end shrink-0">
+                                    <button onclick="App.updateState({showGuide: false})" class="w-full sm:w-auto px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all shadow-sm active:scale-95">Entendido, ¡A organizar!</button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                if (this.state.restrictingStudent) {
+                    const rs = this.state.restrictingStudent;
+                    const filteredStudents = this.state.students.filter(s => s.id !== rs.id && s.name.toLowerCase().includes(this.state.restrictionSearchTerm.toLowerCase()));
+                    
+                    html += `
+                        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col max-h-[90vh] overflow-hidden transform transition-all">
+                                <div class="p-6 bg-indigo-600 text-white flex justify-between items-center shrink-0">
+                                    <div>
+                                        <h3 class="text-xl font-bold">Restricciones</h3>
+                                        <p class="text-indigo-100 text-sm">¿Con quién NO debe sentarse ${rs.name}?</p>
+                                    </div>
+                                    <button onclick="App.closeRestrictionModal()" class="p-2 hover:bg-white/10 rounded-full transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
+                                </div>
+                                
+                                <div class="p-4 border-b border-slate-100 bg-slate-50 shrink-0">
+                                    <div class="relative">
+                                        <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4"></i>
+                                        <input type="text" id="restrictionSearchInput" placeholder="Buscar estudiante..." value="${this.state.restrictionSearchTerm}" oninput="App.setRestrictionSearchTerm(this.value)" class="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all text-slate-700" />
+                                        ${this.state.restrictionSearchTerm ? `<button onclick="App.setRestrictionSearchTerm('')" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>` : ''}
+                                    </div>
+                                </div>
+
+                                <!-- SE HA AÑADIDO ID PARA RECORDAR EL SCROLL -->
+                                <div id="restriction-list-container" class="p-4 overflow-y-auto space-y-2 flex-1">
+                                    ${filteredStudents.map(s => {
+                                        let rType = null;
+                                        if (Array.isArray(rs.restrictions)) {
+                                            if (rs.restrictions.includes(s.id)) rType = 'all';
+                                        } else if (rs.restrictions) {
+                                            rType = rs.restrictions[s.id];
+                                        }
+
+                                        const isSame = rType === 'same';
+                                        const isAll = rType === 'all';
+
+                                        return `
+                                            <div class="w-full flex items-center justify-between p-2 rounded-xl border-2 transition-all ${isAll ? 'bg-red-50 border-red-200' : isSame ? 'bg-orange-50 border-orange-200' : 'bg-slate-50 border-transparent'}">
+                                                <span class="font-medium text-slate-700 ml-2 text-sm">${s.name}</span>
+                                                <div class="flex items-center gap-1">
+                                                    <button onclick="App.setRestriction('${s.id}', ${isSame ? 'null' : "'same'"})" class="px-2 sm:px-3 py-1.5 text-[9px] sm:text-[10px] font-bold rounded-lg transition-all ${isSame ? 'bg-orange-500 text-white shadow-md' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}">BANCO</button>
+                                                    <button onclick="App.setRestriction('${s.id}', ${isAll ? 'null' : "'all'"})" class="px-2 sm:px-3 py-1.5 text-[9px] sm:text-[10px] font-bold rounded-lg transition-all ${isAll ? 'bg-red-500 text-white shadow-md' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}">ALREDEDOR</button>
+                                                </div>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                    ${filteredStudents.length === 0 ? `<div class="text-center py-6 text-slate-400"><p class="text-sm font-medium">No se encontraron estudiantes</p></div>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (this.state.limitStudent) {
+                    const ls = this.state.limitStudent;
+                    html += `
+                        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                                <div class="p-6 bg-amber-500 text-white flex justify-between items-center">
+                                    <div>
+                                        <h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="arrow-down-to-line" class="w-6 h-6"></i> Sentar Hasta</h3>
+                                        <p class="text-amber-50 text-sm">Determina la fila máxima para ${ls.name}</p>
+                                    </div>
+                                    <button onclick="App.updateState({limitStudent: null})" class="p-2 hover:bg-white/10 rounded-full transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
+                                </div>
+                                <div class="p-6 space-y-4">
+                                    <div class="grid grid-cols-4 gap-2">
+                                        <button onclick="App.updateStudentMaxRow(null)" class="p-3 rounded-lg border-2 text-xs font-bold transition-all ${ls.maxRow === null ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-100 border-slate-200 text-slate-500'}">LIBRE</button>
+                                        ${[1,2,3,4,5,6,7].map(num => `
+                                            <button onclick="App.updateStudentMaxRow(${num})" class="p-3 rounded-lg border-2 text-xs font-bold transition-all ${ls.maxRow === num ? 'bg-amber-500 text-white border-amber-500' : 'bg-slate-100 border-slate-200 text-slate-500'}">FILA ${num}</button>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (this.state.confirmDeleteAll) {
+                    html += `
+                        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all text-center p-6">
+                                <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center text-red-600 mx-auto mb-4">
+                                    <i data-lucide="alert-triangle" class="w-8 h-8"></i>
+                                </div>
+                                <h3 class="text-xl font-bold text-slate-800 mb-2">¿Borrar toda la lista?</h3>
+                                <p class="text-slate-500 text-sm mb-6">Esta acción eliminará a todos los estudiantes y sus asignaciones de puesto. No se puede deshacer.</p>
+                                <div class="flex gap-3">
+                                    <button onclick="App.cancelDeleteAll()" class="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all">Cancelar</button>
+                                    <button onclick="App.confirmDeleteAllStudents()" class="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-all shadow-lg shadow-red-200">Sí, borrar</button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (this.state.editNameStudent) {
+                    html += `
+                        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all">
+                                <div class="p-6 bg-indigo-600 text-white flex justify-between items-center">
+                                    <h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="pencil" class="w-5 h-5"></i> Editar Nombre</h3>
+                                    <button onclick="App.closeEditNameModal()" class="p-2 hover:bg-white/10 rounded-full transition-colors"><i data-lucide="x" class="w-5 h-5"></i></button>
+                                </div>
+                                <form onsubmit="App.saveStudentName(event)" class="p-6 space-y-4">
+                                    <div>
+                                        <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Nombre del Estudiante</label>
+                                        <input type="text" id="editStudentNameInput" value="${this.state.editNameStudent.name}" class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 outline-none text-slate-700 font-bold transition-all" />
+                                    </div>
+                                    <div class="flex gap-3 pt-2">
+                                        <button type="button" onclick="App.closeEditNameModal()" class="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all">Cancelar</button>
+                                        <button type="submit" class="flex-1 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all shadow-lg shadow-indigo-200">Guardar</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                return html;
+            },
+
+            renderSalagrama() {
+                const conflicts = this.getConflicts();
+                const warnings = this.getRowWarnings();
+                const benchedList = this.state.students.filter(s => this.state.benchedStudents.has(s.id) || !Object.values(this.state.assignments).includes(s.id));
+                
+                // La suma de mesas y pasillos conforma el tamaño total de la cuadricula real
+                const totalGridCols = this.state.cols + (this.state.colAisles ? this.state.colAisles.length : 0);
+                
+                let gridHtml = '';
+                
+                // Generar Controles Superiores de Columnas para Modo Edición
+                if (this.state.editMode) {
+                    gridHtml += `<div class="flex items-center justify-center pr-2 font-bold text-slate-300 text-[10px]"><i data-lucide="settings-2" class="w-4 h-4"></i></div>`;
+                    for (let c = 0; c < totalGridCols; c++) {
+                        const isColAisle = this.state.colAisles && this.state.colAisles.includes(c);
+                        gridHtml += `
+                            <div class="flex items-center justify-center mb-2 w-full">
+                                <button onclick="App.toggleColAisle(${c})" title="${isColAisle ? 'Quitar pasillo' : 'Insertar pasillo'}" class="px-2 py-1.5 text-[9px] font-black rounded-lg transition-all shadow-sm ${isColAisle ? 'bg-red-500 text-white hover:bg-red-600 shadow-red-200 ring-2 ring-red-200' : 'bg-white border-2 border-slate-200 text-slate-400 hover:border-indigo-400 hover:text-indigo-500'}">
+                                    ${isColAisle ? 'QUITAR' : '+ PASILLO'}
+                                </button>
+                            </div>
+                        `;
+                    }
+                }
+
+                let created = 0, r = 0, visualRowLabel = 1, visualRowIdx = 0;
+                const targetSeats = this.state.students.length - benchedList.length;
+                let renderedExtraRows = 0; 
+                
+                while (true) {
+                    if (created >= Math.max(1, targetSeats)) {
+                        if (!this.state.editMode) break;
+                        if (renderedExtraRows >= 2) break;
+                        renderedExtraRows++;
+                    }
+
+                    const isRowAisle = this.state.rowAisles && this.state.rowAisles.includes(r);
+                    
+                    let rowHeader = `<div class="flex items-center justify-center pr-2 font-bold text-slate-400 text-sm select-none my-2 sm:my-3">${isRowAisle ? '' : visualRowLabel}</div>`;
+                    if (this.state.editMode) {
+                        rowHeader = `
+                            <div class="flex items-center justify-center pr-2 my-2 sm:my-3">
+                                <button onclick="App.toggleRowAisle(${r})" title="${isRowAisle ? 'Quitar pasillo' : 'Insertar pasillo'}" class="px-2 py-1.5 text-[9px] font-black rounded-lg transition-all shadow-sm ${isRowAisle ? 'bg-red-500 text-white hover:bg-red-600 shadow-red-200 ring-2 ring-red-200' : 'bg-white border-2 border-slate-200 text-slate-400 hover:border-indigo-400 hover:text-indigo-500'}">
+                                    ${isRowAisle ? 'QUITAR' : '+ PASILLO'}
+                                </button>
+                            </div>
+                        `;
+                    }
+                    gridHtml += rowHeader;
+
+                    // Si toda la fila es un pasillo horizontal
+                    if (isRowAisle) {
+                        gridHtml += `
+                            <div style="grid-column: span ${totalGridCols};" class="w-full flex items-center justify-center my-2 sm:my-3">
+                                <div class="w-full h-10 sm:h-14 bg-slate-200/40 rounded-lg flex items-center justify-center relative">
+                                    <span class="text-slate-400 text-[10px] font-black tracking-widest uppercase">PASILLO HORIZONTAL</span>
+                                </div>
+                            </div>
+                        `;
+                        r++;
+                        continue; 
+                    }
+
+                    // Renderización de cada puesto en la fila
+                    let visualColIdx = 0;
+                    for (let c = 0; c < totalGridCols; c++) {
+                        const isColAisle = this.state.colAisles && this.state.colAisles.includes(c);
+                        const sId = `${r}-${c}`;
+
+                        if (isColAisle) {
+                            gridHtml += `
+                                <div class="w-full h-full flex items-center justify-center">
+                                    <div class="w-full bg-slate-200/40 rounded-lg min-h-[80px] sm:min-h-[96px] relative mx-1 my-2 sm:mx-1.5 sm:my-3 flex items-center justify-center">
+                                        ${visualRowLabel === 1 ? '<span class="text-slate-400 text-[10px] font-black tracking-widest absolute top-1/2 -translate-y-1/2" style="writing-mode: vertical-rl; transform: rotate(180deg);">PASILLO</span>' : ''}
+                                    </div>
+                                </div>
+                            `;
+                            continue;
+                        }
+
+                        // Lógica de Agrupación (Márgenes y Redondeos)
+                        let deskMargin = 'm-2 sm:m-3';
+                        let deskRounding = 'rounded-xl';
+                        let topBarRounding = 'rounded-t-lg';
+                        const format = this.state.groupFormat || 'individual';
+                        
+                        if (format === 'pairs') {
+                            const pos = visualColIdx % 2;
+                            if (pos === 0) { 
+                                deskMargin = 'my-2 ml-3 mr-0.5 sm:my-3 sm:ml-4 sm:mr-1'; deskRounding = 'rounded-l-2xl rounded-r-md'; topBarRounding = 'rounded-tl-xl rounded-tr-sm'; 
+                            } else { 
+                                deskMargin = 'my-2 ml-0.5 mr-3 sm:my-3 sm:ml-1 sm:mr-4'; deskRounding = 'rounded-r-2xl rounded-l-md'; topBarRounding = 'rounded-tr-xl rounded-tl-sm'; 
+                            }
+                        } else if (format === 'trios') {
+                            const pos = visualColIdx % 3;
+                            if (pos === 0) { 
+                                deskMargin = 'my-2 ml-3 mr-0.5 sm:my-3 sm:ml-4 sm:mr-1'; deskRounding = 'rounded-l-2xl rounded-r-md'; topBarRounding = 'rounded-tl-xl rounded-tr-sm'; 
+                            } else if (pos === 1) { 
+                                deskMargin = 'my-2 mx-0.5 sm:my-3 sm:mx-1'; deskRounding = 'rounded-md'; topBarRounding = 'rounded-t-sm'; 
+                            } else { 
+                                deskMargin = 'my-2 ml-0.5 mr-3 sm:my-3 sm:ml-1 sm:mr-4'; deskRounding = 'rounded-r-2xl rounded-l-md'; topBarRounding = 'rounded-tr-xl rounded-tl-sm'; 
+                            }
+                        } else if (format === 'quads') {
+                            const posX = visualColIdx % 2;
+                            const posY = visualRowIdx % 2;
+                            
+                            deskMargin = `${posY === 0 ? 'mt-3 mb-0.5 sm:mt-4 sm:mb-1' : 'mt-0.5 mb-3 sm:mt-1 sm:mb-4'} ${posX === 0 ? 'ml-3 mr-0.5 sm:ml-4 sm:mr-1' : 'ml-0.5 mr-3 sm:ml-1 sm:mr-4'}`;
+                            
+                            if (posX === 0 && posY === 0) { 
+                                deskRounding = 'rounded-tl-2xl rounded-tr-md rounded-bl-md rounded-br-sm'; topBarRounding = 'rounded-tl-xl rounded-tr-sm'; 
+                            } else if (posX === 1 && posY === 0) { 
+                                deskRounding = 'rounded-tr-2xl rounded-tl-md rounded-br-md rounded-bl-sm'; topBarRounding = 'rounded-tr-xl rounded-tl-sm'; 
+                            } else if (posX === 0 && posY === 1) { 
+                                deskRounding = 'rounded-bl-2xl rounded-tl-md rounded-br-md rounded-tr-sm'; topBarRounding = 'rounded-tl-md rounded-tr-sm'; 
+                            } else if (posX === 1 && posY === 1) { 
+                                deskRounding = 'rounded-br-2xl rounded-tr-md rounded-bl-md rounded-tl-sm'; topBarRounding = 'rounded-tr-md rounded-tl-sm'; 
+                            }
+                        }
+
+                        // Si es un escritorio oculto manualmente (Puesto Nulo)
+                        if (this.state.hiddenDesks[sId]) {
+                            gridHtml += `
+                                <div class="w-full h-full flex items-center justify-center">
+                                    <div onclick="App.toggleDeskVisibility('${sId}')" class="w-20 h-20 sm:w-24 sm:h-24 flex items-center justify-center transition-all ${deskMargin} ${deskRounding} ${this.state.editMode ? 'bg-slate-200 border-2 border-dashed border-slate-300 cursor-pointer hover:bg-indigo-50 hover:border-indigo-300' : 'opacity-0 pointer-events-none'}">
+                                        ${this.state.editMode ? '<span class="text-slate-400 text-[9px] font-bold text-center leading-tight">PUESTO<br>NULO</span>' : ''}
+                                    </div>
+                                </div>
+                            `;
+                        } else {
+                            // Renderización estándar de escritorio
+                            const stuId = this.state.assignments[sId];
+                            const s = this.state.students.find(item => item.id === stuId);
+                            const isConflict = conflicts.has(sId);
+                            const isWarning = warnings.has(sId);
+                            const isHighlighted = this.state.searchTerm.trim() !== '' && s && s.name.toLowerCase().includes(this.state.searchTerm.toLowerCase());
+                            
+                            const bgClass = isHighlighted ? 'bg-blue-50 border-blue-500 ring-4 ring-blue-200 z-10 scale-105 shadow-lg border-2' : `bg-white border-2 shadow-sm ${isConflict ? 'border-red-600 ring-4 ring-red-100' : isWarning ? 'border-amber-500 ring-4 ring-amber-100' : 'border-indigo-200'}`;
+                            const topBarClass = isHighlighted ? 'bg-blue-500' : isConflict ? 'bg-red-600' : isWarning ? 'bg-amber-500' : 'bg-indigo-300';
+                            const avatarClass = isHighlighted ? 'bg-blue-200 text-blue-800' : isConflict ? 'bg-red-100 text-red-700' : isWarning ? 'bg-amber-100 text-amber-600' : 'bg-indigo-100 text-indigo-700';
+                            const nameClass = isHighlighted ? 'text-blue-800' : isConflict ? 'text-red-700' : isWarning ? 'text-amber-600' : 'text-slate-700';
+
+                            let adaptiveTextSize = 'text-[9px] sm:text-[11px]';
+                            if (s && s.name.length > 16) adaptiveTextSize = 'text-[7px] sm:text-[8.5px]';
+                            else if (s && s.name.length > 11) adaptiveTextSize = 'text-[8px] sm:text-[9.5px]';
+
+                            gridHtml += `
+                                <div class="w-full h-full flex items-center justify-center">
+                                    <div onclick="App.toggleDeskVisibility('${sId}')" ondragover="event.preventDefault()" ondrop="if(!App.state.editMode) App.handleDropOnSeat(event, '${sId}')" class="group w-20 h-20 sm:w-24 sm:h-24 transition-all relative flex flex-col items-center justify-center p-2 text-center select-none ${deskMargin} ${deskRounding} ${this.state.editMode ? 'cursor-pointer hover:ring-2 hover:ring-red-400 bg-white border-2 border-indigo-200 shadow-sm' : bgClass}">
+                                        <div class="absolute top-0 inset-x-0 h-2 ${topBarRounding} ${topBarClass}"></div>
+                                        
+                                        ${s && !this.state.editMode ? `
+                                            <button onclick="App.handleUnassignStudent(event, '${sId}', '${s.id}')" class="absolute -top-2 -left-2 bg-white hover:bg-red-500 text-slate-400 hover:text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-all z-20 shadow-md border border-slate-200 hover:border-red-500" title="Quitar del puesto" data-html2canvas-ignore="true">
+                                                <i data-lucide="x" class="w-3 h-3" stroke-width="3"></i>
+                                            </button>
+                                            <button onclick="App.toggleLockStudent(event, '${s.id}')" class="absolute -top-2 -right-2 rounded-full p-1 transition-all z-20 shadow-md border ${s.isLocked ? 'bg-amber-50 text-amber-600 border-amber-400 opacity-100 hover:bg-amber-100' : 'bg-white text-slate-400 border-slate-200 hover:text-amber-500 hover:border-amber-400 opacity-0 group-hover:opacity-100'}" title="${s.isLocked ? 'Desbloquear estudiante' : 'Bloquear estudiante (No mover en mezcla)'}" data-html2canvas-ignore="true">
+                                                <i data-lucide="${s.isLocked ? 'lock' : 'unlock'}" class="w-3 h-3" stroke-width="3"></i>
+                                            </button>
+                                        ` : ''}
+
+                                        ${s ? `
+                                            <div draggable="${!this.state.editMode && !s.isLocked}" ondragstart="App.handleDragStart(event, '${s.id}', '${sId}')" class="w-full h-full flex flex-col items-center justify-center pt-1 overflow-hidden ${s.isLocked ? 'cursor-default' : ''}">
+                                                <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center font-bold mb-0.5 sm:mb-1 shadow-inner text-xs shrink-0 ${avatarClass}">
+                                                    ${isWarning && !isConflict && !isHighlighted ? `<i data-lucide="arrow-down-to-line" class="w-3.5 h-3.5"></i>` : s.name.charAt(0).toUpperCase()}
+                                                </div>
+                                                <div class="w-full flex-1 flex items-center justify-center overflow-hidden px-0.5">
+                                                    <span class="font-bold leading-[1.1] text-center w-full break-words ${adaptiveTextSize} ${nameClass}" style="word-break: break-word">${s.name}</span>
+                                                </div>
+                                            </div>
+                                        ` : `
+                                            <div class="flex flex-col items-center gap-1 opacity-20"><div class="w-8 h-8 rounded-full bg-slate-200"></div><div class="h-2 w-10 bg-slate-200 rounded"></div></div>
+                                        `}
+                                    </div>
+                                </div>
+                            `;
+                            created++;
+                        }
+                        visualColIdx++;
+                    }
+                    r++;
+                    visualRowLabel++;
+                    visualRowIdx++; 
+                }
+
+                const templateCols = `auto ` + Array.from({length: totalGridCols}).map((_, c) => {
+                    return (this.state.colAisles && this.state.colAisles.includes(c)) ? 'minmax(30px, 45px)' : 'minmax(0, 1fr)';
+                }).join(' ');
+
+                return `
+                    <!-- SIDEBAR -->
+                    <div id="sidebar-scroll-container" class="w-full md:w-80 bg-white border-r border-slate-200 shadow-sm flex flex-col h-full shrink-0 z-10 overflow-y-auto no-scrollbar">
+                        <div class="p-6 border-b border-slate-100 bg-indigo-600 text-white hidden md:block shrink-0">
+                            <h1 class="text-xl font-bold flex items-center gap-2">Configuración</h1>
+                            <p class="text-indigo-100 text-sm mt-1">Organización de la sala</p>
+                        </div>
+                        <div class="flex-1 p-4 flex flex-col">
+                            
+                            <!-- NUEVO DISEÑO DE CONFIGURACIÓN PASO A PASO -->
+                            <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200 shadow-sm space-y-5 mb-6">
+                                
+                                <!-- Paso 1 -->
+                                <div>
+                                    <h3 class="text-xs font-black text-slate-800 mb-1.5 flex items-center gap-2">
+                                        <span class="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px]">1</span> 
+                                        Ancho de la Sala
+                                    </h3>
+                                    <p class="text-[10px] text-slate-500 mb-2 leading-relaxed ml-7">¿Cuántas mesas hay de lado a lado en total? (No cuentes los pasillos aún).</p>
+                                    <div class="ml-7 flex items-center gap-2 bg-white border border-slate-300 rounded-xl p-1.5 focus-within:ring-2 focus-within:ring-indigo-500 transition-all shadow-sm">
+                                        <input type="number" id="colsInput" min="1" max="20" value="${this.state.cols}" onchange="App.setCols(this.value)" class="w-full bg-transparent text-sm font-black text-center text-indigo-700 outline-none" />
+                                        <span class="text-[10px] font-bold text-slate-400 pr-3 uppercase tracking-wider">mesas</span>
+                                    </div>
+                                </div>
+
+                                <!-- Paso 2 -->
+                                <div class="pt-4 border-t border-slate-200">
+                                    <h3 class="text-xs font-black text-slate-800 mb-1.5 flex items-center gap-2">
+                                        <span class="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px]">2</span> 
+                                        Pasillos Automáticos
+                                    </h3>
+                                    <p class="text-[10px] text-slate-500 mb-3 leading-relaxed ml-7">Separa las mesas insertando columnas vacías rápidamente.</p>
+                                    
+                                    <div class="ml-7 grid grid-cols-2 gap-2 mb-3">
+                                        <div class="bg-white p-2.5 border border-slate-200 rounded-xl shadow-sm">
+                                            <label class="text-[9px] text-slate-400 font-bold mb-1 block uppercase tracking-wider">Separar cada:</label>
+                                            <div class="flex items-center">
+                                                <input type="number" id="aisleFreqInput" min="1" value="${this.state.aisleFrequency}" onchange="App.setAisleFreq(this.value)" class="w-full font-black text-sm text-indigo-700 bg-transparent outline-none" />
+                                                <span class="text-[9px] text-slate-400 font-bold ml-1">mesas</span>
+                                            </div>
+                                        </div>
+                                        <div class="bg-white p-2.5 border border-slate-200 rounded-xl shadow-sm">
+                                            <label class="text-[9px] text-slate-400 font-bold mb-1 block uppercase tracking-wider">Crear máximo:</label>
+                                            <div class="flex items-center">
+                                                <input type="number" id="maxAislesInput" min="0" value="${this.state.maxAisles}" onchange="App.setMaxAisles(this.value)" class="w-full font-black text-sm text-indigo-700 bg-transparent outline-none" />
+                                                <span class="text-[9px] text-slate-400 font-bold ml-1">pasillos</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button onclick="App.applyAutoAisles()" class="ml-7 w-[calc(100%-1.75rem)] flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold py-2 rounded-xl transition-all shadow-sm">
+                                        <i data-lucide="wand-2" class="w-3.5 h-3.5"></i> Aplicar Pasillos
+                                    </button>
+                                </div>
+
+                                <!-- Paso 3 -->
+                                <div class="pt-4 border-t border-slate-200">
+                                    <h3 class="text-xs font-black text-slate-800 mb-1.5 flex items-center gap-2">
+                                        <span class="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px]">3</span> 
+                                        Formato Visual
+                                    </h3>
+                                    <p class="text-[10px] text-slate-500 mb-2 leading-relaxed ml-7">¿Cómo están agrupados los puestos físicamente?</p>
+                                    <div class="ml-7 relative">
+                                        <select id="groupFormatSelect" onchange="App.setGroupFormat(this.value)" class="w-full appearance-none border border-slate-300 rounded-xl p-2.5 pl-3 pr-8 text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 bg-white shadow-sm cursor-pointer hover:border-indigo-400 transition-colors">
+                                            <option value="individual" ${this.state.groupFormat === 'individual' || !this.state.groupFormat ? 'selected' : ''}>Individuales (1x1)</option>
+                                            <option value="pairs" ${this.state.groupFormat === 'pairs' ? 'selected' : ''}>En Parejas (2x1)</option>
+                                            <option value="trios" ${this.state.groupFormat === 'trios' ? 'selected' : ''}>En Tríos (3x1)</option>
+                                            <option value="quads" ${this.state.groupFormat === 'quads' ? 'selected' : ''}>Cuartetos (2x2)</option>
+                                        </select>
+                                        <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+                                    </div>
+                                </div>
+
+                                <!-- Paso 4 (Opcional) -->
+                                <div class="pt-4 border-t border-slate-200">
+                                    <div class="flex items-start gap-3 bg-${this.state.editMode ? 'indigo-50' : 'white'} p-3 rounded-xl border ${this.state.editMode ? 'border-indigo-300 ring-2 ring-indigo-100' : 'border-slate-200'} transition-all shadow-sm">
+                                        <div class="mt-0.5 shrink-0">
+                                            <label class="relative inline-flex items-center cursor-pointer">
+                                                <input type="checkbox" class="sr-only peer" ${this.state.editMode ? 'checked' : ''} onchange="App.toggleEditMode()" />
+                                                <div class="w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                                            </label>
+                                        </div>
+                                        <div class="flex-1">
+                                            <h4 class="text-[11px] font-black text-slate-800 uppercase tracking-wide">Edición Manual Avanzada</h4>
+                                            <p class="text-[9px] text-slate-500 mt-1 leading-relaxed">Actívalo para hacer clic en el mapa y borrar escritorios individuales (nulos) o agregar pasillos fila por fila.</p>
+                                        </div>
+                                    </div>
+                                    
+                                    ${this.state.editMode ? `
+                                        <div class="mt-3 flex gap-2">
+                                            <button onclick="App.hideEmptyDesks()" class="flex-1 flex items-center justify-center gap-1 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-[10px] font-bold py-2 rounded-xl transition-all shadow-sm" title="Ocultar automáticamente todas las mesas que no tienen estudiantes asignados">
+                                                <i data-lucide="eraser" class="w-3.5 h-3.5"></i> Ocultar Vacíos
+                                            </button>
+                                            <button onclick="App.showAllDesks()" class="flex-1 flex items-center justify-center gap-1 bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 text-[10px] font-bold py-2 rounded-xl transition-all shadow-sm" title="Restaurar todas las mesas que fueron ocultadas manualmente">
+                                                <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Restaurar
+                                            </button>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            </div>
+                            
+                            <div class="space-y-3 mb-6 shrink-0 mt-auto">
+                                <button onclick="App.handleRandomize()" class="flex items-center justify-center gap-2 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95">
+                                    <i data-lucide="shuffle" class="w-5 h-5"></i> Mezcla Inteligente
+                                </button>
+                                <button onclick="App.handleDownloadPDF()" ${this.state.isExporting || this.state.students.length === 0 ? 'disabled' : ''} class="flex items-center justify-center gap-2 w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-emerald-200 transition-all active:scale-95">
+                                    ${this.state.isExporting ? `<i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i>` : `<i data-lucide="download" class="w-5 h-5"></i>`}
+                                    Descargar PDF
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- MAPA -->
+                    <div class="flex-1 bg-slate-100 flex flex-col h-full overflow-hidden relative">
+                        <!-- Alertas -->
+                        <div class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex flex-col gap-2 items-center">
+                            ${conflicts.size > 0 && !this.state.editMode ? `
+                                <div class="bg-red-600 text-white px-6 py-2 rounded-full shadow-2xl flex items-center gap-3 border-2 border-white animate-bounce">
+                                    <i data-lucide="alert-triangle" class="w-5 h-5 animate-pulse"></i>
+                                    <span class="font-black text-xs uppercase tracking-tighter">Conflicto de Restricción</span>
+                                </div>
+                            ` : ''}
+                            ${warnings.size > 0 && !this.state.editMode ? `
+                                <div class="bg-amber-500 text-white px-6 py-2 rounded-full shadow-2xl flex items-center gap-3 border-2 border-white animate-pulse">
+                                    <i data-lucide="arrow-down-to-line" class="w-5 h-5"></i>
+                                    <span class="font-black text-xs uppercase tracking-tighter">Fuera de fila permitida</span>
+                                </div>
+                            ` : ''}
+                        </div>
+
+                        <!-- Topbar Salagrama -->
+                        <div class="h-12 bg-white/50 flex items-center justify-between px-4 sm:px-8 border-b border-slate-200 shrink-0">
+                            <div class="flex-1 hidden sm:block"></div>
+                            <span class="text-xs font-bold text-slate-400 uppercase tracking-widest shrink-0 text-center flex-1 sm:flex-none">Mapa del Aula</span>
+                            <div class="flex-1 flex justify-end">
+                                <div class="relative w-full max-w-[220px]">
+                                    <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5"></i>
+                                    <input type="text" id="salagramaSearchInput" placeholder="Buscar alumno..." value="${this.state.searchTerm}" oninput="App.setSearchTerm(this.value)" class="w-full pl-8 pr-8 py-1.5 bg-white border border-slate-200 rounded-full text-xs focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all text-slate-700" />
+                                    ${this.state.searchTerm ? `<button onclick="App.setSearchTerm('')" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>` : ''}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Bandeja de Estudiantes en Espera (Horizontal Top) -->
+                        ${benchedList.length > 0 ? `
+                            <div class="bg-amber-50 border-b border-amber-200 p-3 shrink-0 shadow-inner z-20 overflow-hidden flex flex-col">
+                                <div class="flex items-center gap-3 mb-2 px-2 shrink-0">
+                                    <div class="flex items-center justify-center w-6 h-6 rounded-full bg-amber-200 text-amber-700">
+                                        <i data-lucide="users" class="w-3.5 h-3.5"></i>
+                                    </div>
+                                    <h3 class="text-xs font-black text-amber-800 uppercase tracking-wider">
+                                        Estudiantes en espera (${benchedList.length})
+                                    </h3>
+                                    <p class="text-[10px] text-amber-600 font-medium hidden sm:block">Arrastra a un estudiante hacia una mesa vacía en el mapa de abajo.</p>
+                                </div>
+                                <div class="flex gap-2 overflow-x-auto pb-2 px-2 custom-scrollbar">
+                                    ${benchedList.map(s => `
+                                        <div draggable="true" ondragstart="App.handleDragStart(event, '${s.id}', '')" class="bg-white px-3 py-2 rounded-lg border border-amber-200 shadow-sm flex items-center gap-2 cursor-grab hover:border-amber-400 hover:shadow-md transition-all group shrink-0 w-48">
+                                            <i data-lucide="grip-vertical" class="w-4 h-4 text-slate-300 group-hover:text-amber-500"></i>
+                                            <div class="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 font-black text-[10px] shrink-0">${s.name.charAt(0).toUpperCase()}</div>
+                                            <span class="text-xs font-bold text-slate-700 truncate">${s.name}</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+
+                        <!-- Canvas PDF -->
+                        <div id="map-scroll-container" class="flex-1 overflow-auto p-8 flex justify-center items-start">
+                            <div id="salagrama-map" class="inline-flex flex-col items-center p-8 bg-slate-50 rounded-2xl min-w-max min-h-max border border-slate-100 shadow-sm">
+                                <div class="w-full max-w-2xl flex justify-between items-end mb-6 px-2 border-b-2 border-slate-200 pb-3">
+                                    <h2 class="text-2xl font-black text-slate-800 tracking-tight uppercase">${this.state.courseName || 'Mi Clase'}</h2>
+                                    <p class="text-sm font-bold text-slate-500 flex items-center gap-2"><i data-lucide="calendar-days" class="w-4 h-4"></i> ${this.state.classDate ? this.state.classDate.split('-').reverse().join('/') : ''}</p>
+                                </div>
+                                <div class="w-full max-w-2xl bg-white border-b-4 border-indigo-600 shadow-sm rounded-t-xl mb-12 p-3 text-center text-indigo-700 font-black text-sm tracking-[0.3em]">
+                                    <i data-lucide="monitor-play" class="inline w-5 h-5 mr-2"></i> PIZARRA
+                                </div>
+                                <div class="grid gap-0 mx-auto px-4" style="grid-template-columns: ${templateCols}">
+                                    ${gridHtml}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            },
+
+            renderLista() {
+                return `
+                    <div id="lista-scroll-container" class="flex-1 overflow-auto p-4 sm:p-10 bg-slate-50">
+                        <div class="max-w-4xl mx-auto space-y-8">
+                            <div class="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-8">
+                                <div class="flex flex-col items-start">
+                                    <h2 class="text-3xl font-black text-slate-800 tracking-tight">Directorio</h2>
+                                    <p class="text-slate-500 font-medium mb-6">Gestiona ${this.state.students.length} estudiantes y sus preferencias.</p>
+                                    
+                                    <div class="flex flex-wrap items-center gap-3">
+                                        <button onclick="App.setTab('salagrama')" class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all active:scale-95">
+                                            Ir a mi sala <i data-lucide="arrow-right" class="w-5 h-5"></i>
+                                        </button>
+                                        <button onclick="App.handleDeleteAll()" class="flex items-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-4 py-3 rounded-xl font-bold transition-all active:scale-95" title="Borrar toda la lista">
+                                            <i data-lucide="trash-2" class="w-5 h-5"></i> <span class="hidden sm:inline">Borrar lista</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex flex-col gap-3 w-full max-w-sm">
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex items-center gap-2 text-emerald-800 font-bold"><i data-lucide="file-spreadsheet" class="w-5 h-5 text-emerald-600"></i> Importar CSV / XLSX</div>
+                                        <label class="cursor-pointer ${this.state.isImporting ? 'bg-emerald-400' : 'bg-emerald-600 hover:bg-emerald-700'} text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2">
+                                            ${this.state.isImporting ? `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>` : `<i data-lucide="upload" class="w-4 h-4"></i>`}
+                                            <input type="file" accept=".xlsx, .xls, .csv" class="hidden" onchange="App.handleFileUpload(this)" ${this.state.isImporting ? 'disabled' : ''} />
+                                        </label>
+                                    </div>
+                                    ${this.state.importMessage.text ? `<div class="text-xs font-bold ${this.state.importMessage.type === 'success' ? 'text-emerald-700' : 'text-red-600'}">${this.state.importMessage.text}</div>` : ''}
+                                    
+                                    <div class="pt-2 mt-1 border-t border-emerald-200/60">
+                                        <button onclick="App.handleDownloadTemplate()" class="w-full flex items-center justify-center gap-2 text-xs font-bold text-emerald-700 hover:text-emerald-800 hover:bg-emerald-100 py-2 rounded-xl transition-all">
+                                            <i data-lucide="download" class="w-4 h-4"></i> Descargar Plantilla Excel
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row gap-6">
+                                <div class="flex-1">
+                                    <label class="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-2"><i data-lucide="graduation-cap" class="w-4 h-4"></i> Curso / Clase</label>
+                                    <select id="courseSelect" onchange="App.setCourseName(this.value)" class="w-full border-2 border-slate-200 rounded-xl px-4 py-2 focus:border-indigo-500 outline-none text-sm font-medium transition-colors text-slate-700 bg-white">
+                                        <option value="" disabled ${!this.state.courseName ? 'selected' : ''}>Seleccione un curso...</option>
+                                        <option value="1° Básico" ${this.state.courseName === '1° Básico' ? 'selected' : ''}>1° Básico</option>
+                                        <option value="2° Básico" ${this.state.courseName === '2° Básico' ? 'selected' : ''}>2° Básico</option>
+                                        <option value="3° Básico" ${this.state.courseName === '3° Básico' ? 'selected' : ''}>3° Básico</option>
+                                        <option value="4° Básico" ${this.state.courseName === '4° Básico' ? 'selected' : ''}>4° Básico</option>
+                                        <option value="5° Básico" ${this.state.courseName === '5° Básico' ? 'selected' : ''}>5° Básico</option>
+                                        <option value="6° Básico" ${this.state.courseName === '6° Básico' ? 'selected' : ''}>6° Básico</option>
+                                        <option value="7° Básico" ${this.state.courseName === '7° Básico' ? 'selected' : ''}>7° Básico</option>
+                                        <option value="8° Básico" ${this.state.courseName === '8° Básico' ? 'selected' : ''}>8° Básico</option>
+                                        <option value="1° Medio" ${this.state.courseName === '1° Medio' ? 'selected' : ''}>1° Medio</option>
+                                        <option value="2° Medio" ${this.state.courseName === '2° Medio' ? 'selected' : ''}>2° Medio</option>
+                                        <option value="3° Medio" ${this.state.courseName === '3° Medio' ? 'selected' : ''}>3° Medio</option>
+                                        <option value="4° Medio" ${this.state.courseName === '4° Medio' ? 'selected' : ''}>4° Medio</option>
+                                    </select>
+                                </div>
+                                <div class="flex-1">
+                                    <label class="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-2"><i data-lucide="calendar-days" class="w-4 h-4"></i> Fecha</label>
+                                    <input type="date" id="classDateInput" value="${this.state.classDate}" onchange="App.setClassDate(this.value)" class="w-full border-2 border-slate-200 rounded-xl px-4 py-2 focus:border-indigo-500 outline-none text-sm font-medium transition-colors text-slate-700" />
+                                </div>
+                            </div>
+
+                            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                <table class="w-full text-left">
+                                    <thead class="bg-slate-50/50 border-b border-slate-200">
+                                        <tr class="text-slate-400 text-[10px] font-black uppercase tracking-widest">
+                                            <th class="p-6">Estudiante</th>
+                                            <th class="p-6">Configuración</th>
+                                            <th class="p-6 text-right">Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${this.state.students.map(s => `
+                                            <tr class="border-b border-slate-100 hover:bg-slate-50 transition-colors group">
+                                                <td class="p-6 font-bold text-slate-700 flex items-center gap-4">
+                                                    <div class="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-black text-sm shrink-0">${s.name.charAt(0).toUpperCase()}</div>
+                                                    <span class="truncate">${s.name}</span>
+                                                    <button onclick="App.openEditNameModal('${s.id}')" class="text-slate-400 sm:text-slate-300 hover:text-indigo-600 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-all p-1.5 rounded-lg hover:bg-indigo-50 shrink-0" title="Editar nombre">
+                                                        <i data-lucide="pencil" class="w-4 h-4"></i>
+                                                    </button>
+                                                </td>
+                                                <td class="p-6">
+                                                    <div class="flex gap-2">
+                                                        <button onclick="App.openRestrictionModal('${s.id}')" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${(Array.isArray(s.restrictions) ? s.restrictions.length : Object.keys(s.restrictions || {}).length) > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-slate-50 border-slate-100 text-slate-400'}">
+                                                            <i data-lucide="user-x" class="w-3.5 h-3.5"></i> ${Array.isArray(s.restrictions) ? s.restrictions.length : Object.keys(s.restrictions || {}).length} Restr.
+                                                        </button>
+                                                        <button onclick="App.openLimitModal('${s.id}')" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${s.maxRow ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-slate-50 border-slate-100 text-slate-400'}">
+                                                            <i data-lucide="arrow-down-to-line" class="w-3.5 h-3.5"></i> ${s.maxRow ? `Hasta Fila ${s.maxRow}` : 'Sin Límite'}
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                                <td class="p-6 text-right">
+                                                    <button onclick="App.handleRemoveStudent('${s.id}')" class="text-slate-300 hover:text-red-500 p-2"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                        <tr class="bg-slate-50/30">
+                                            <td colspan="3" class="p-4">
+                                                <form onsubmit="App.handleAddStudent(event)" class="flex gap-2 max-w-md ml-2">
+                                                    <input type="text" id="newStudentName" placeholder="Nuevo estudiante..." class="flex-1 bg-white border-2 border-slate-200 rounded-xl px-4 py-2 focus:border-indigo-500 outline-none text-sm font-medium" />
+                                                    <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold hover:bg-indigo-700 transition-all"><i data-lucide="check" class="w-5 h-5"></i></button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        };
+
+        // Exportar a global para que funcionen los onclicks
+        window.App = App;
+
+        // Iniciar la aplicación cuando cargue el DOM
+        document.addEventListener('DOMContentLoaded', () => {
+            App.init();
+        });
+    </script>
+</body>
+</html>
