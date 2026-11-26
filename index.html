@@ -3,15 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Organizador de Puestos</title>
+    <title>Salagrama 4.1 · Gestor de Sala</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
     <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
 
     <style>
+        #app { height: 100dvh; }
+        button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 3px solid #6366f1; outline-offset: 3px; }
+        #map-scroll-container { justify-content: safe center; min-height: 0; }
+        #lista-scroll-container table { min-width: 560px; }
+        #lista-scroll-container table td { padding: 1rem; }
+        #lista-scroll-container table { border-collapse: collapse; }
+        #lista-scroll-container table { width:100%; }
+        @media(max-width:767px) { #sidebar-scroll-container { height: 38%; min-height: 120px; border-bottom: 1px solid #cbd5e1; } #map-scroll-container { padding: 12px; } #salagrama-map { padding: 16px; } #app > div:last-child { min-height:0; } }
+        @media(prefers-reduced-motion:reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
         /* Estilos base para arrastrar y soltar */
         [draggable="true"] {
             cursor: grab;
@@ -38,6 +47,34 @@
             background-color: #fcd34d; /* amber-300 */
             border-radius: 20px;
         }
+        /* Navegación y ayudas de la versión 4.0 */
+        .workflow {display:flex; align-items:center; gap:8px; padding:8px 16px; background:#fff; border-bottom:1px solid #e2e8f0; overflow-x:auto; flex-shrink:0;}
+        .workflow button {display:flex; align-items:center; gap:8px; white-space:nowrap; padding:7px 12px; border:1px solid #e2e8f0; border-radius:10px; color:#475569; font-size:13px; font-weight:600;}
+        .workflow button[aria-current="step"] {background:#eef2ff; border-color:#a5b4fc; color:#4338ca;}
+        .workflow button:disabled {opacity:.55; cursor:not-allowed;}
+        .workflow .step-num {display:grid; place-items:center; width:22px; height:22px; border-radius:50%; background:#e2e8f0; font-weight:800;}
+        .workflow [aria-current="step"] .step-num {background:#4f46e5;color:white;}
+        .quick-actions button {min-height:44px;}
+        .mini-room {display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; border:1px solid #e2e8f0; background:#f8fafc; padding:8px; border-radius:10px; margin:12px 0;}
+        .mini-room .board {grid-column:1/-1; background:#e0e7ff; color:#3730a3; font-size:10px; font-weight:800; text-align:center; border-radius:4px; padding:3px;}
+        .mini-room .desk {border:1px solid #c7d2fe; background:white; color:#475569; border-radius:4px; text-align:center; font-size:11px; font-weight:700; padding:4px;}
+        .mini-room .example {background:#4f46e5;color:white;border-color:#4f46e5;}
+        /* 4.1: acciones del mapa independientes del panel de configuración. */
+        #sidebar-scroll-container {min-height:0; scrollbar-width:thin; scrollbar-color:#cbd5e1 transparent;}
+        #sidebar-scroll-container::-webkit-scrollbar {width:7px;}
+        #sidebar-scroll-container::-webkit-scrollbar-thumb {background:#cbd5e1;border-radius:9px;}
+        .map-toolbar {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 14px;padding:10px 16px;background:#fff;border-bottom:1px solid #e2e8f0;flex-shrink:0;}
+        .map-actions {display:flex;align-items:center;flex-wrap:wrap;gap:7px;}
+        .map-action {display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:38px;padding:8px 12px;border-radius:9px;font-size:12px;font-weight:700;white-space:nowrap;color:white;transition:background .15s;}
+        .map-action:disabled {background:#cbd5e1!important;color:#475569;cursor:not-allowed;}
+        .map-action svg {flex-shrink:0;}
+        .donate-action {background:#0070ba;color:#fff;display:inline-flex;align-items:center;gap:9px;padding:7px 13px;border:1px solid #005ea6;border-radius:10px;box-shadow:0 2px 6px #0070ba26;white-space:nowrap;flex-shrink:0;line-height:1.15;}
+        .donate-action:hover {background:#005ea6;}
+        .donate-action .donate-label {font-size:13px;font-weight:800;}
+        .donate-action .donate-caption {font-size:10px;color:#e0f2fe;display:block;margin-top:3px;}
+        @media(max-width:767px) {.map-toolbar {padding:8px 10px;gap:7px;} .map-actions {width:100%;gap:5px;} .map-action {flex:1;min-height:36px;padding:6px 8px;font-size:11px;} .donate-action {padding:6px 10px;} .donate-action .donate-caption {display:none;} }
+
+        @media(max-width:767px) { .workflow {padding:6px 8px;gap:5px;} .workflow button {padding:6px 8px;font-size:11px;} .workflow .step-num {width:19px;height:19px;} #sidebar-scroll-container {height:40%;} }
     </style>
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col relative overflow-hidden">
@@ -47,7 +84,20 @@
 
     <script type="module">
         // --- ESTADO GLOBAL DE LA APLICACIÓN ---
+        const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        const fold = v => String(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+        const uid = () => globalThis.crypto?.randomUUID?.() || 's'+Date.now().toString(36)+Math.random().toString(36).slice(2);
+        const localDate = () => { const d = new Date(); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10); };
+        const projectKeys = ['cols','colAisles','rowAisles','aisleFrequency','maxAisles','groupFormat','hiddenDesks','students','assignments','benchedStudents','courseName','classDate'];
         const App = {
+            history: [], future: [], selectedStudent: null,
+            snapshot() { return JSON.stringify(Object.fromEntries(projectKeys.map(k => [k, k==='benchedStudents' ? [...this.state[k]] : this.state[k]]))); },
+            restore(raw) { const d=JSON.parse(raw); d.benchedStudents=new Set(d.benchedStudents); this.state={...this.state,...d,restrictingStudent:null,limitStudent:null,editNameStudent:null,confirmDeleteAll:false}; this.selectedStudent=null; this.render(); },
+            undo() { if(!this.history.length)return; this.future.push(this.snapshot()); this.restore(this.history.pop()); },
+            redo() { if(!this.future.length)return; this.history.push(this.snapshot()); this.restore(this.future.pop()); },
+            validSeat(key) { const [r,c]=key.split('-').map(Number), s=this.state; return /^\d+-\d+$/.test(key)&&r>=0&&c>=0&&c<s.cols+s.colAisles.length&&!s.hiddenDesks[key]&&!s.colAisles.includes(c)&&!s.rowAisles.includes(r); },
+            selectSeat(seat) { if(this.state.editMode){this.toggleDeskVisibility(seat);return;} const id=this.state.assignments[seat]; if(this.selectedStudent){const chosen=this.selectedStudent; this.selectedStudent=null; const source=Object.keys(this.state.assignments).find(k=>this.state.assignments[k]===chosen)||''; if(source===seat){this.render();return;} this.handleDropOnSeat({preventDefault(){},dataTransfer:{getData:k=>k==='studentId'?chosen:source}},seat); this.render();} else if(id&&!this.state.students.find(s=>s.id===id)?.isLocked){this.selectedStudent=id;this.render();} },
+            selectBench(id) { this.selectedStudent=this.selectedStudent===id?null:id;this.render(); },
             state: {
                 // --- APP ---
                 activeTab: 'lista',
@@ -67,7 +117,7 @@
                 assignments: {},
                 benchedStudents: new Set(),
                 courseName: '',
-                classDate: new Date().toISOString().split('T')[0],
+                classDate: localDate(),
                 searchTerm: '',
                 restrictionSearchTerm: '',
                 restrictingStudent: null,
@@ -75,74 +125,61 @@
                 confirmDeleteAll: false,
                 editNameStudent: null,
                 notification: null,
-                showGuide: false
+                showGuide: false,
+                showWelcome: false,
+                showPaste: false,
+                listSearch: '',
+                showImageExportModal: false,
+                exportFormat: 'image'
             },
 
             // --- INICIALIZACIÓN ---
             init() {
+                // Solo se recuerda si se vio la bienvenida, nunca los datos del curso.
+                try { this.state.showWelcome = localStorage.getItem('salagrama_welcome_v4') !== 'seen'; }
+                catch { this.state.showWelcome = true; }
                 this.render();
+            },
+            dismissWelcome(action = 'start') {
+                try { localStorage.setItem('salagrama_welcome_v4', 'seen'); } catch {}
+                this.updateState({showWelcome:false, showGuide:action==='guide'});
+                if(action==='open') document.getElementById('projectFileInput')?.click();
+                if(action==='start') document.getElementById('newStudentName')?.focus();
+            },
+            addPastedStudents(e) {
+                e.preventDefault();
+                const names=document.getElementById('pasteNames').value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean);
+                if(!names.length) return;
+                if(this.state.students.length+names.length>1000) { this.showNotification('La lista no puede superar los 1000 estudiantes.',true); return; }
+                this.updateState({students:[...this.state.students,...names.map(name=>({id:uid(),name,restrictions:{},maxRow:null}))],showPaste:false,listSearch:''});
+                this.showNotification(`${names.length} estudiantes añadidos.`);
+            },
+            miniRoom(mode) {
+                const teacher=mode==='teacher';
+                const board='<div class="board">PIZARRA</div>';
+                return `<div class="mini-room" aria-hidden="true">${teacher?'':board}${(teacher?['F','E','D','C','B','A']:['A','B','C','D','E','F']).map(v=>`<div class="desk ${v==='A'?'example':''}">${v}</div>`).join('')}${teacher?board:''}</div>`;
+            },
+            renderWorkflow() {
+                const count=this.state.students.length;
+                return `<nav class="workflow" aria-label="Pasos para crear un salagrama">
+                    <button onclick="App.setTab('lista')" ${this.state.activeTab==='lista'?'aria-current="step"':''}><span class="step-num">1</span> Preparar lista ${count?`<span class="text-indigo-600">(${count})</span>`:''}</button>
+                    <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400 shrink-0"></i>
+                    <button onclick="App.setTab('salagrama')" ${this.state.activeTab==='salagrama'?'aria-current="step"':''}><span class="step-num">2</span> Organizar sala</button>
+                    <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400 shrink-0"></i>
+                    <button onclick="App.setTab('salagrama');App.openExportModal('pdf')" ${!count||this.state.isExporting?'disabled':''}><span class="step-num">3</span> Exportar plano</button>
+                    <span class="ml-auto hidden lg:inline text-xs text-slate-500 whitespace-nowrap">${count?'Guarda el proyecto para editarlo otro día.':'Comienza agregando o importando estudiantes.'}</span>
+                </nav>`;
             },
 
             // --- LÓGICA DE ASIGNACIÓN AUTOMÁTICA ---
             runAutoAssignment() {
-                const s = this.state;
-                if (s.students.length === 0) {
-                    if (Object.keys(s.assignments).length > 0) {
-                        s.assignments = {};
-                    }
-                    return;
-                }
-
-                const newAssignments = {};
-                const assignedIds = new Set();
-                
-                Object.entries(s.assignments).forEach(([seatId, studentId]) => {
-                    const [ar, ac] = seatId.split('-').map(Number);
-                    const studentExists = s.students.find(st => st.id === studentId);
-                    
-                    if (studentExists && !s.hiddenDesks[seatId] && 
-                        !(s.colAisles && s.colAisles.includes(ac)) && 
-                        !(s.rowAisles && s.rowAisles.includes(ar))) {
-                        newAssignments[seatId] = studentId;
-                        assignedIds.add(studentId);
-                    }
-                });
-
-                const unassignedOnes = s.students.filter(st => !assignedIds.has(st.id) && !s.benchedStudents.has(st.id));
-                const totalGridCols = s.cols + (s.colAisles ? s.colAisles.length : 0);
-                
-                if (unassignedOnes.length > 0 || Object.keys(newAssignments).length !== (s.students.length - s.benchedStudents.size)) {
-                    let studentIdx = 0;
-                    let r = 0;
-                    let seatsFound = 0;
-                    const targetSeats = s.students.length - s.benchedStudents.size;
-
-                    while (seatsFound < targetSeats) {
-                        if (s.rowAisles && s.rowAisles.includes(r)) {
-                            r++;
-                            continue; 
-                        }
-
-                        for (let c = 0; c < totalGridCols; c++) {
-                            if (s.colAisles && s.colAisles.includes(c)) continue;
-
-                            const seatId = `${r}-${c}`;
-                            if (!s.hiddenDesks[seatId]) {
-                                if (!newAssignments[seatId] && studentIdx < unassignedOnes.length) {
-                                    newAssignments[seatId] = unassignedOnes[studentIdx].id;
-                                    studentIdx++;
-                                }
-                                seatsFound++;
-                            }
-                            if (seatsFound >= targetSeats) break;
-                        }
-                        r++;
-                    }
-                    s.assignments = newAssignments;
-                }
+                const s=this.state, next={}, used=new Set(), ids=new Set(s.students.map(x=>x.id));
+                for(const [seat,id] of Object.entries(s.assignments)) if(ids.has(id)&&!used.has(id)&&!s.benchedStudents.has(id)&&this.validSeat(seat)){next[seat]=id;used.add(id);}
+                const pending=s.students.filter(x=>!used.has(x.id)&&!s.benchedStudents.has(x.id));
+                let i=0; for(let r=0;i<pending.length;r++) for(let c=0;c<s.cols+s.colAisles.length&&i<pending.length;c++){const key=`${r}-${c}`;if(this.validSeat(key)&&!next[key])next[key]=pending[i++].id;}
+                s.assignments=next;
             },
 
-            // --- CALCULOS COMPUTADOS ---
             getNeighbors(seatId) {
                 const [r, c] = seatId.split('-').map(Number);
                 const neighbors = [];
@@ -160,7 +197,7 @@
                 let vRow = 0;
                 const totalGridCols = this.state.cols + (this.state.colAisles ? this.state.colAisles.length : 0);
                 
-                for (let r = 0; r < 50; r++) { 
+                for (let r = 0; r < Math.max(1, this.getCalculatedRows()); r++) { 
                     if (this.state.rowAisles && this.state.rowAisles.includes(r)) continue;
                     let vCol = 0;
                     for (let c = 0; c < totalGridCols; c++) {
@@ -276,7 +313,7 @@
                     if (count >= this.state.students.length) break;
                     r++;
                 }
-                return r + 1;
+                return Math.max(r + 1, ...Object.keys(this.state.assignments).map(k=>Number(k.split("-")[0])+1));
             },
 
             // --- EXPORTAR / IMPORTAR PROYECTO (.JSON) ---
@@ -360,34 +397,16 @@
                     try {
                         const data = JSON.parse(e.target.result);
                         
-                        if (data.benchedStudents) {
-                            data.benchedStudents = new Set(data.benchedStudents);
-                        } else {
-                            data.benchedStudents = new Set();
-                        }
-
-                        if (data.students) {
-                            data.students = data.students.map(s => {
-                                let newR = {};
-                                if (Array.isArray(s.restrictions)) {
-                                    s.restrictions.forEach(id => newR[id] = 'all');
-                                } else if (s.restrictions) {
-                                    newR = s.restrictions;
-                                }
-                                return { ...s, restrictions: newR };
-                            });
-                        }
-                        
-                        this.updateState({
-                            ...data,
-                            activeTab: this.state.activeTab,
-                            editMode: this.state.editMode,
-                            confirmDeleteAll: false,
-                            restrictingStudent: null,
-                            limitStudent: null,
-                            editNameStudent: null
-                        });
-                        
+                        if(!data || !Array.isArray(data.students) || data.students.length>1000) throw Error('Lista inválida');
+                        const ids=new Map();
+                        for(const st of data.students){if(!st||typeof st.name!=='string'||!st.name.trim()||st.id==null||ids.has(String(st.id)))throw Error('Estudiante inválido');ids.set(String(st.id),uid());}
+                        const ints=(v,max)=>Array.isArray(v)?[...new Set(v.filter(n=>Number.isInteger(n)&&n>=0&&n<max))].sort((a,b)=>a-b):[];
+                        const cols=Math.max(1,Math.min(20,Math.trunc(Number(data.cols)||8)));
+                        const colAisles=ints(data.colAisles,40).filter((n,i)=>n-i<cols);
+                        const rowAisles=ints(data.rowAisles,200);
+                        const seatOk=k=>/^\d{1,3}-\d{1,2}$/.test(k)&&Number(k.split('-')[0])<500&&Number(k.split('-')[1])<cols+colAisles.length;
+                        const students=data.students.map(st=>({id:ids.get(String(st.id)),name:st.name.trim(),isLocked:st.isLocked===true,maxRow:Number.isInteger(st.maxRow)&&st.maxRow>0?st.maxRow:null,restrictions:Object.fromEntries(Object.entries(Array.isArray(st.restrictions)?Object.fromEntries(st.restrictions.map(i=>[i,'all'])):st.restrictions||{}).filter(([id,t])=>ids.has(id)&&['all','same'].includes(t)).map(([id,t])=>[ids.get(id),t]))}));
+                        this.updateState({cols,colAisles,rowAisles,students,groupFormat:['individual','pairs','trios','quads'].includes(data.groupFormat)?data.groupFormat:'individual',aisleFrequency:Math.max(1,Math.min(20,Math.trunc(Number(data.aisleFrequency)||2))),maxAisles:Math.max(0,Math.min(20,Math.trunc(Number(data.maxAisles)||0))),hiddenDesks:Object.fromEntries(Object.entries(data.hiddenDesks||{}).filter(([k,v])=>seatOk(k)&&v===true)),assignments:Object.fromEntries(Object.entries(data.assignments||{}).filter(([k,v])=>seatOk(k)&&ids.has(String(v))).map(([k,v])=>[k,ids.get(String(v))])),benchedStudents:new Set((Array.isArray(data.benchedStudents)?data.benchedStudents:[]).map(i=>ids.get(String(i))).filter(Boolean)),courseName:typeof data.courseName==='string'?data.courseName:'',classDate:/^\d{4}-\d{2}-\d{2}$/.test(data.classDate)?data.classDate:localDate(),restrictingStudent:null,limitStudent:null,editNameStudent:null,confirmDeleteAll:false});
                         input.value = '';
                         this.showNotification("Proyecto cargado correctamente");
                         
@@ -396,6 +415,7 @@
                         this.showNotification("Error: Archivo no válido", true);
                     }
                 };
+                reader.onerror=()=>this.showNotification("No se pudo leer el proyecto",true);
                 reader.readAsText(file);
             },
 
@@ -410,13 +430,15 @@
 
             // --- ACCIONES ---
             updateState(newState) {
+                const before=this.snapshot();
                 this.state = { ...this.state, ...newState };
+                if(before!==this.snapshot()){this.history.push(before);if(this.history.length>40)this.history.shift();this.future=[];this.selectedStudent=null;}
                 this.render();
             },
 
             setTab(tab) { this.updateState({ activeTab: tab }); },
             setCols(val) { 
-                const newCols = Number(val) || 1; 
+                const newCols = Math.max(1, Math.min(20, Math.trunc(Number(val)||1))); 
                 let validAisles = [];
                 let sortedAisles = [...(this.state.colAisles || [])].sort((a,b)=>a-b);
                 
@@ -558,6 +580,7 @@
 
             toggleDeskVisibility(seatId) {
                 if (!this.state.editMode) return;
+                const occupant=this.state.students.find(s=>s.id===this.state.assignments[seatId]); if(occupant?.isLocked){this.showNotification("Desbloquea el estudiante antes de ocultar su puesto",true);return;}
                 const newHidden = { ...this.state.hiddenDesks };
                 if (newHidden[seatId]) delete newHidden[seatId];
                 else newHidden[seatId] = true;
@@ -601,10 +624,11 @@
                 e.preventDefault();
                 const nameInput = document.getElementById('newStudentName').value;
                 if (!nameInput.trim()) return;
-                const newS = { id: Date.now().toString(), name: nameInput.trim(), restrictions: {}, maxRow: null };
+                this.clearDraft=true;
+                const newS = { id: uid(), name: nameInput.trim(), restrictions: {}, maxRow: null };
                 this.updateState({ 
                     students: [...this.state.students, newS],
-                    newStudentName: '' 
+                    newStudentName: '', listSearch: '' 
                 });
             },
 
@@ -618,7 +642,7 @@
                 });
 
                 this.updateState({
-                    students: this.state.students.filter(s => s.id !== studentId),
+                    students: this.state.students.filter(s => s.id !== studentId).map(s=>{const restrictions={...s.restrictions};delete restrictions[studentId];return {...s,restrictions};}),
                     benchedStudents: newBenched,
                     assignments: newAssignments
                 });
@@ -743,7 +767,8 @@
                     (this.state.rowAisles && this.state.rowAisles.includes(tr))) return;
                 
                 const studentId = e.dataTransfer.getData('studentId');
-                const sourceSeatId = e.dataTransfer.getData('sourceSeatId');
+                const sourceSeatId = Object.keys(this.state.assignments).find(k=>this.state.assignments[k]===studentId)||'';
+                const moving=this.state.students.find(s=>s.id===studentId); if(!moving||moving.isLocked||this.state.editMode)return;
                 if (sourceSeatId === targetSeatId) return;
 
                 const newAssignments = { ...this.state.assignments };
@@ -793,7 +818,6 @@
             },
 
             handleRandomize() {
-                this.state.benchedStudents = new Set();
                 const totalGridCols = this.state.cols + (this.state.colAisles ? this.state.colAisles.length : 0);
                 const rows = this.getCalculatedRows();
                 const visualMap = this.getVisualGridMap();
@@ -825,14 +849,18 @@
                 
                 const studentsToPlace = this.state.students.filter(s => !lockedStudentIds.has(s.id));
                 const seatsToFill = availableSeats.slice(0, studentsToPlace.length);
+                const byId=new Map(this.state.students.map(s=>[s.id,s]));
+                const neighbors=new Map(seatsToFill.concat([...lockedSeats]).map(k=>[k,this.getNeighbors(k)]));
+                const mates=new Map(seatsToFill.concat([...lockedSeats]).map(k=>[k,this.getGroupMates(k,visualMap)]));
+                const shuffle = a => { a=[...a]; for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a; };
                 
                 let bestAssignment = null;
                 let minScore = Infinity;
 
                 for (let attempt = 0; attempt < 500; attempt++) {
                     const currentAssign = { ...lockedAssignments };
-                    const shuffledSeats = [...seatsToFill].sort(() => Math.random() - 0.5);
-                    const shuffledStudents = [...studentsToPlace].sort(() => Math.random() - 0.5);
+                    const shuffledSeats = shuffle(seatsToFill);
+                    const shuffledStudents = shuffle(studentsToPlace);
                     
                     shuffledStudents.forEach((s, i) => { 
                         if (shuffledSeats[i]) currentAssign[shuffledSeats[i]] = s.id; 
@@ -840,7 +868,7 @@
 
                     let currentPenalty = 0;
                     Object.entries(currentAssign).forEach(([seatId, sId]) => {
-                        const student = this.state.students.find(st => st.id === sId);
+                        const student = byId.get(sId);
                         if (!student) return;
 
                         let restrictions = student.restrictions || {};
@@ -848,14 +876,14 @@
                             restrictions = Object.fromEntries(restrictions.map(id => [id, 'all']));
                         }
 
-                        this.getNeighbors(seatId).forEach(nId => {
+                        (neighbors.get(seatId)||[]).forEach(nId => {
                             const neighborStudentId = currentAssign[nId];
                             if (neighborStudentId && restrictions[neighborStudentId] === 'all') {
                                 currentPenalty += 100;
                             }
                         });
 
-                        this.getGroupMates(seatId, visualMap).forEach(mId => {
+                        (mates.get(seatId)||[]).forEach(mId => {
                             const mateStudentId = currentAssign[mId];
                             if (mateStudentId && (restrictions[mateStudentId] === 'same' || restrictions[mateStudentId] === 'all')) {
                                 currentPenalty += 100;
@@ -881,7 +909,9 @@
                         bestAssignment = currentAssign;
                     }
                 }
-                this.updateState({ assignments: bestAssignment || lockedAssignments });
+                this.updateState({ assignments: bestAssignment || lockedAssignments, benchedStudents: new Set() });
+                const conflicts=this.getConflicts().size, warnings=this.getRowWarnings().size;
+                this.showNotification(conflicts||warnings ? `Mejor distribución encontrada: ${conflicts} puestos en conflicto y ${warnings} fuera de límite.` : 'Distribución lista, sin conflictos detectados.', !!(conflicts||warnings));
             },
 
             async handleFileUpload(input) {
@@ -996,7 +1026,7 @@
                                     // Capitalización correcta (MAYÚSCULAS -> Nombre Propio)
                                     finalName = finalName.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
                                     
-                                    newS.push({ id: Math.random().toString(36).substr(2, 9), name: finalName, restrictions: {}, maxRow: null });
+                                    newS.push({ id: uid(), name: finalName, restrictions: {}, maxRow: null });
                                 }
                             }
 
@@ -1021,9 +1051,10 @@
                             this.render();
                         }, 4000);
                     };
+                    reader.onerror=()=>this.updateState({isImporting:false,importMessage:{text:"No se pudo leer el archivo",type:"error"}});
                     reader.readAsArrayBuffer(file);
                 } catch (err) { 
-                    this.updateState({ isImporting: false }); 
+                    this.updateState({ isImporting: false, importMessage:{text:"No se pudo cargar Excel. Revisa tu conexión.",type:"error"} }); 
                 }
             },
 
@@ -1064,58 +1095,176 @@
                 }
             },
 
-            async handleDownloadPDF() {
-                this.updateState({ isExporting: true });
-                await new Promise(resolve => setTimeout(resolve, 100));
 
-                const element = document.getElementById('salagrama-map');
-                if (!element) {
-                    this.updateState({ isExporting: false });
-                    return;
+
+            openExportModal(format = 'image') {
+                this.updateState({ showImageExportModal: true, exportFormat: format });
+            },
+
+            closeExportModal() {
+                this.updateState({ showImageExportModal: false });
+            },
+
+            async ensureHtml2Canvas() {
+                if (window.html2canvas) return;
+                await new Promise((resolve,reject) => {
+                    const script = document.createElement('script');
+                    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+                    script.onload = resolve;
+                    script.onerror = () => reject(Error('No se pudo cargar la biblioteca'));
+                    setTimeout(() => reject(Error('Tiempo de carga agotado')), 15000);
+                    document.head.appendChild(script);
+                });
+            },
+
+            async ensureJsPDF() {
+                if (window.jspdf) return;
+                await new Promise((resolve,reject) => {
+                    const script = document.createElement('script');
+                    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+                    script.onload = resolve;
+                    script.onerror = () => reject(Error('No se pudo cargar la biblioteca'));
+                    setTimeout(() => reject(Error('Tiempo de carga agotado')), 15000);
+                    document.head.appendChild(script);
+                });
+            },
+
+            createExportClone(viewMode = 'student') {
+                const sourceElement = document.getElementById('salagrama-map');
+                if (!sourceElement) throw new Error('No se encontró el salagrama para exportar');
+
+                const wrapper = document.createElement('div');
+                wrapper.style.position = 'fixed';
+                wrapper.style.left = '-10000px';
+                wrapper.style.top = '0';
+                wrapper.style.padding = '24px';
+                wrapper.style.background = '#f1f5f9';
+                wrapper.style.zIndex = '-1';
+                wrapper.style.pointerEvents = 'none';
+
+                const exportElement = sourceElement.cloneNode(true);
+                exportElement.id = 'salagrama-map-export';
+                exportElement.style.width = `${sourceElement.scrollWidth}px`;
+                exportElement.style.maxWidth = 'none';
+                exportElement.style.boxSizing = 'border-box';
+                exportElement.querySelectorAll('button').forEach(btn => btn.remove());
+
+                if (viewMode === 'teacher') {
+                    exportElement.style.transform = 'rotate(180deg)';
+                    exportElement.style.transformOrigin = 'center center';
+                    exportElement.querySelectorAll('[data-export-upright="true"]').forEach(node => {
+                        node.style.transform = 'rotate(180deg)';
+                        node.style.transformOrigin = 'center center';
+                    });
                 }
 
-                try {
-                    if (!window.html2canvas) {
-                        await new Promise((resolve) => {
-                            const script = document.createElement('script');
-                            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-                            script.onload = resolve;
-                            document.head.appendChild(script);
-                        });
-                    }
-                    if (!window.jspdf) {
-                        await new Promise((resolve) => {
-                            const script = document.createElement('script');
-                            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-                            script.onload = resolve;
-                            document.head.appendChild(script);
-                        });
-                    }
+                wrapper.appendChild(exportElement);
+                document.body.appendChild(wrapper);
+                return { wrapper, exportElement };
+            },
 
-                    const { jsPDF } = window.jspdf;
-                    
-                    const canvas = await window.html2canvas(element, {
+            async getCanvasForView(viewMode = 'student') {
+                await this.ensureHtml2Canvas();
+                const { wrapper, exportElement } = this.createExportClone(viewMode);
+                try {
+                    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                    return await window.html2canvas(exportElement, {
                         scale: 2,
                         useCORS: true,
                         backgroundColor: '#f8fafc',
-                        windowWidth: element.scrollWidth,
-                        windowHeight: element.scrollHeight
+                        windowWidth: exportElement.scrollWidth,
+                        windowHeight: exportElement.scrollHeight
                     });
+                } finally {
+                    wrapper.remove();
+                }
+            },
 
-                    const imgData = canvas.toDataURL('image/png');
-                    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+            getExportFileBase() {
+                const baseName = this.state.courseName ? this.state.courseName.replace(/[^a-z0-9]/gi, '_') : 'Clase';
+                const dateName = this.state.classDate || localDate();
+                return `Salagrama_${baseName}_${dateName}`;
+            },
 
-                    const imgProps = pdf.getImageProperties(imgData);
-                    const pdfWidth = pdf.internal.pageSize.getWidth();
-                    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+            getViewLabel(viewMode = 'student') {
+                if (viewMode === 'teacher') return 'Vision_Profesor';
+                if (viewMode === 'both') return 'Ambas_Visiones';
+                return 'Vision_Estudiante';
+            },
 
-                    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-                    
-                    const fileName = `Salagrama_${this.state.courseName ? this.state.courseName.replace(/[^a-z0-9]/gi, '_') : 'Clase'}_${this.state.classDate || new Date().toLocaleDateString()}.pdf`;
-                    pdf.save(fileName);
+            async startExport(viewMode = 'student') {
+                if (this.state.exportFormat === 'pdf') return this.handleDownloadPDF(viewMode);
+                return this.handleDownloadImage(viewMode);
+            },
 
+            async handleDownloadImage(viewMode = 'student') {
+                this.updateState({ isExporting: true, showImageExportModal: false });
+                await new Promise(resolve => setTimeout(resolve, 100));
+                const modes = viewMode === 'both' ? ['teacher', 'student'] : [viewMode];
+
+                try {
+                    for (const mode of modes) {
+                        const canvas = await this.getCanvasForView(mode);
+                        const link = document.createElement('a');
+                        link.href = canvas.toDataURL('image/png');
+                        link.download = `${this.getExportFileBase()}_${this.getViewLabel(mode)}.png`;
+                        document.body.appendChild(link);
+                        link.click();
+                        setTimeout(() => link.remove(), 0);
+                        await new Promise(resolve => setTimeout(resolve, 150));
+                    }
+
+                    const message = viewMode === 'both'
+                        ? 'Se descargaron ambas visiones en formato PNG'
+                        : `Imagen descargada (${viewMode === 'teacher' ? 'visión profesor' : 'visión estudiante'})`;
+                    this.showNotification(message);
+                } catch (error) {
+                    console.error('Error generando imagen:', error);
+                    this.showNotification('No se pudo generar la imagen. Revisa la conexión e inténtalo nuevamente.', true);
+                } finally {
+                    this.updateState({ isExporting: false });
+                }
+            },
+
+            async handleDownloadPDF(viewMode = 'student') {
+                this.updateState({ isExporting: true, showImageExportModal: false });
+                await new Promise(resolve => setTimeout(resolve, 100));
+                const modes = viewMode === 'both' ? ['teacher', 'student'] : [viewMode];
+
+                try {
+                    await this.ensureJsPDF();
+                    const { jsPDF } = window.jspdf;
+                    let pdf = null;
+
+                    for (let i = 0; i < modes.length; i++) {
+                        const mode = modes[i];
+                        const canvas = await this.getCanvasForView(mode);
+                        const orientation = canvas.width > canvas.height ? 'landscape' : 'portrait';
+                        const imgData = canvas.toDataURL('image/png');
+
+                        if (!pdf) {
+                            pdf = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
+                        } else {
+                            pdf.addPage('a4', orientation);
+                        }
+
+                        const imgProps = pdf.getImageProperties(imgData);
+                        const pw = pdf.internal.pageSize.getWidth();
+                        const ph = pdf.internal.pageSize.getHeight();
+                        const scale = Math.min((pw - 16) / imgProps.width, (ph - 16) / imgProps.height);
+                        const w = imgProps.width * scale;
+                        const h = imgProps.height * scale;
+                        pdf.addImage(imgData, 'PNG', (pw - w) / 2, (ph - h) / 2, w, h);
+                    }
+
+                    pdf.save(`${this.getExportFileBase()}_${this.getViewLabel(viewMode)}.pdf`);
+                    const message = viewMode === 'both'
+                        ? 'PDF descargado con ambas visiones'
+                        : `PDF descargado (${viewMode === 'teacher' ? 'visión profesor' : 'visión estudiante'})`;
+                    this.showNotification(message);
                 } catch (error) {
                     console.error('Error generando PDF:', error);
+                    this.showNotification('No se pudo generar el PDF. Revisa la conexión e inténtalo nuevamente.', true);
                 } finally {
                     this.updateState({ isExporting: false });
                 }
@@ -1136,6 +1285,8 @@
 
                 // NUEVO: Capturar el elemento activo y posición del cursor
                 const activeElementId = document.activeElement ? document.activeElement.id : null;
+                const draft = document.getElementById("newStudentName")?.value;
+                const pasteDraft = document.getElementById('pasteNames')?.value;
                 let selectionStart = null;
                 let selectionEnd = null;
                 if (activeElementId && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
@@ -1158,18 +1309,16 @@
                     ` : ''}
                     ${this.renderModals()}
                     ${this.renderNav()}
-                    <div class="flex-1 overflow-hidden flex flex-col md:flex-row relative">
+                    ${this.renderWorkflow()}
+                    <div class="flex-1 min-h-0 overflow-hidden flex flex-col md:flex-row">
                         ${this.state.activeTab === 'salagrama' ? this.renderSalagrama() : this.renderLista()}
-                        
-                        <!-- FIRMA FLOTANTE GLOBAL DE LA APLICACIÓN -->
-                        <div class="fixed bottom-1.5 right-3 text-[10px] font-bold text-slate-400/60 pointer-events-none select-none z-[60] tracking-wide">
-                            Creado por el profesor Victor Acevedo C.
-                        </div>
                     </div>
                 `;
                 
                 appDiv.innerHTML = html;
-                lucide.createIcons();
+                if(draft && document.getElementById("newStudentName") && !this.clearDraft) document.getElementById("newStudentName").value=draft; this.clearDraft=false;
+                if(pasteDraft && document.getElementById('pasteNames')) document.getElementById('pasteNames').value=pasteDraft;
+                window.lucide?.createIcons();
 
                 // Restaurar posiciones de scroll
                 scrollableElements.forEach(id => {
@@ -1198,29 +1347,33 @@
 
             renderNav() {
                 return `
-                    <div class="bg-white border-b border-slate-200 flex items-center px-4 sm:px-6 h-16 shrink-0 gap-4 shadow-sm z-10 overflow-x-auto">
-                        <div class="flex items-center gap-2 mr-4 text-indigo-700 font-bold shrink-0">
+                    <div class="bg-white border-b border-slate-200 flex items-center px-3 sm:px-4 h-16 shrink-0 gap-2 sm:gap-3 shadow-sm z-10 overflow-x-auto">
+                        <div class="flex items-center gap-2 mr-1 text-indigo-700 font-bold shrink-0">
                             <i data-lucide="grid-2x2" class="w-6 h-6"></i>
-                            <span class="hidden sm:inline">Gestor de Sala</span>
+                            <span class="hidden sm:inline">Salagrama</span>
                         </div>
-                        <button onclick="App.setTab('lista')" class="flex items-center gap-2 px-4 py-2 rounded-lg font-medium shrink-0 transition-colors ${this.state.activeTab === 'lista' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}">
+                        <button type="button" onclick="window.openPayPalSupport()" title="Realizar una donación voluntaria con PayPal" aria-label="Donar con PayPal (aporte voluntario)" class="donate-action order-1 md:order-2 md:ml-auto"><i data-lucide="heart-handshake" class="w-5 h-5 shrink-0"></i><span class="text-left"><span class="donate-label">Donar con PayPal</span><span class="donate-caption">Aporte voluntario</span></span></button>
+                        <button onclick="App.setTab('lista')" class="order-2 md:order-1 flex items-center gap-2 px-3 py-2 rounded-lg font-medium shrink-0 transition-colors ${this.state.activeTab === 'lista' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}">
                             <i data-lucide="users" class="w-[18px] h-[18px]"></i> Lista
                         </button>
-                        <button onclick="App.setTab('salagrama')" class="flex items-center gap-2 px-4 py-2 rounded-lg font-medium shrink-0 transition-colors ${this.state.activeTab === 'salagrama' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}">
+                        <button onclick="App.setTab('salagrama')" class="order-2 md:order-1 flex items-center gap-2 px-3 py-2 rounded-lg font-medium shrink-0 transition-colors ${this.state.activeTab === 'salagrama' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}">
                             <i data-lucide="layout-dashboard" class="w-[18px] h-[18px]"></i> Salagrama
                         </button>
                         
-                        <div class="flex-1 flex justify-end items-center gap-2 sm:gap-4">
+                        <div class="order-3 flex items-center justify-end gap-2 shrink-0">
+
+                            <button title="Deshacer" aria-label="Deshacer" onclick="App.undo()" ${!this.history.length?'disabled':''} class="p-2 rounded-lg border disabled:opacity-30"><i data-lucide="undo-2" class="w-5 h-5"></i></button>
+                            <button title="Rehacer" aria-label="Rehacer" onclick="App.redo()" ${!this.future.length?'disabled':''} class="p-2 rounded-lg border disabled:opacity-30"><i data-lucide="redo-2" class="w-5 h-5"></i></button>
                             <button onclick="App.updateState({showGuide: true})" class="flex items-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-bold text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Ver guía de uso">
-                                <i data-lucide="help-circle" class="w-5 h-5"></i> <span class="hidden md:inline">Guía</span>
+                                <i data-lucide="help-circle" class="w-5 h-5"></i> <span>Cómo usar</span>
                             </button>
                             <div class="w-px h-6 bg-slate-200 hidden sm:block"></div>
                             <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-bold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all border border-slate-200 shadow-sm" title="Cargar un salagrama guardado anteriormente">
-                                <i data-lucide="folder-open" class="w-4 h-4"></i> <span class="hidden md:inline">Abrir</span>
-                                <input type="file" accept=".json" class="hidden" onchange="App.handleImportProject(this)" />
+                                <i data-lucide="folder-open" class="w-4 h-4"></i> <span>Abrir proyecto</span>
+                                <input id="projectFileInput" type="file" accept=".json" class="hidden" onchange="App.handleImportProject(this)" />
                             </label>
                             <button onclick="App.handleExportProject()" class="flex items-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-all shadow-sm" title="Guardar toda la configuración y estudiantes en un archivo">
-                                <i data-lucide="save" class="w-4 h-4"></i> <span class="hidden md:inline">Guardar</span>
+                                <i data-lucide="save" class="w-4 h-4"></i> <span>Guardar proyecto</span>
                             </button>
                         </div>
                     </div>
@@ -1229,6 +1382,21 @@
 
             renderModals() {
                 let html = '';
+                if (this.state.showWelcome) {
+                    html += `<div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                        <section role="dialog" aria-modal="true" aria-labelledby="welcomeTitle" class="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[90dvh] overflow-y-auto">
+                            <header class="bg-indigo-600 p-6 text-white flex items-start justify-between gap-3"><div><p class="text-indigo-100 text-xs font-bold tracking-widest uppercase mb-2">Organiza tu aula</p><h2 id="welcomeTitle" class="text-2xl font-black">¡Bienvenido a Salagrama!</h2><p class="mt-2 text-sm text-indigo-100">Crea un plano de puestos de tu curso en tres pasos, sin instalar programas.</p></div><button aria-label="Cerrar bienvenida" onclick="App.dismissWelcome('close')" class="p-2 rounded-lg hover:bg-white/10"><i data-lucide="x" class="w-5 h-5"></i></button></header>
+                            <div class="p-5 sm:p-6 space-y-4">
+                                ${[['users','Prepara tu lista','Agrega nombres, pega una lista o importa un archivo Excel.'],['layout-dashboard','Organiza la sala','Indica las mesas y pasillos. Mezcla los puestos o cámbialos manualmente.'],['download','Descarga y guarda','Exporta tu plano en PDF o PNG. Guarda un proyecto JSON para continuar después.']].map(([icon,title,desc],i)=>`<div class="flex items-start gap-3"><span class="shrink-0 grid place-items-center w-10 h-10 rounded-xl bg-indigo-50 text-indigo-700"><i data-lucide="${icon}" class="w-5 h-5"></i></span><div><h3 class="font-bold text-slate-800">${i+1}. ${title}</h3><p class="text-sm text-slate-600">${desc}</p></div></div>`).join('')}
+                                <p class="text-xs text-slate-500 bg-slate-50 rounded-xl p-3">Tu lista no se guarda automáticamente. Usa Guardar proyecto antes de cerrar la página.</p>
+                                <button onclick="App.dismissWelcome('start')" class="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 flex justify-center items-center gap-2">Crear mi primer salagrama <i data-lucide="arrow-right" class="w-5 h-5"></i></button>
+                                <div class="grid grid-cols-2 gap-2"><button onclick="App.dismissWelcome('open')" class="border rounded-xl py-3 text-sm font-bold text-slate-700">Abrir proyecto</button><button onclick="App.dismissWelcome('guide')" class="border rounded-xl py-3 text-sm font-bold text-indigo-700">Ver guía completa</button></div>
+                            </div>
+                        </section></div>`;
+                }
+                if (this.state.showPaste) {
+                    html += `<div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[105] flex items-center justify-center p-4"><form role="dialog" aria-modal="true" aria-labelledby="pasteTitle" onsubmit="App.addPastedStudents(event)" class="bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg max-h-[90dvh] overflow-y-auto"><h2 id="pasteTitle" class="font-black text-xl mb-2">Pegar lista de estudiantes</h2><p class="text-sm text-slate-600 mb-4">Copia los nombres desde tu lista de curso y pega un nombre por línea. Se añadirán a los estudiantes actuales.</p><textarea id="pasteNames" rows="9" required placeholder="Ana Pérez&#10;Benjamín Soto&#10;Camila Díaz" class="w-full border border-slate-300 rounded-xl p-3 text-sm"></textarea><div class="mt-4 flex justify-end gap-2"><button type="button" onclick="App.updateState({showPaste:false})" class="px-4 py-3 rounded-xl border font-bold">Cancelar</button><button class="px-4 py-3 rounded-xl bg-indigo-600 text-white font-bold" type="submit">Añadir estudiantes</button></div></form></div>`;
+                }
 
                 if (this.state.showGuide) {
                     html += `
@@ -1248,7 +1416,7 @@
                                         <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0 font-black text-base sm:text-lg">1</div>
                                         <div>
                                             <h4 class="font-bold text-slate-800 text-base sm:text-lg mb-1">Prepara tu Lista (Pestaña Lista)</h4>
-                                            <p class="text-xs sm:text-sm text-slate-600 mb-3">Agrega a tus estudiantes manualmente o importa tu lista desde un archivo Excel/CSV. Si un estudiante tiene necesidades particulares, usa:</p>
+                                            <p class="text-xs sm:text-sm text-slate-600 mb-3">Agrega a tus estudiantes manualmente, pega varios nombres (uno por línea) o importa tu lista desde Excel/CSV. Si un estudiante tiene necesidades particulares, usa:</p>
                                             <ul class="text-xs sm:text-sm text-slate-500 space-y-2">
                                                 <li class="flex items-start gap-2"><i data-lucide="user-x" class="w-4 h-4 text-red-500 shrink-0 mt-0.5"></i> <span><b>Restricciones:</b> Selecciona con qué compañeros NO debe sentarse.</span></li>
                                                 <li class="flex items-start gap-2"><i data-lucide="arrow-down-to-line" class="w-4 h-4 text-amber-500 shrink-0 mt-0.5"></i> <span><b>Límite de fila:</b> Fija hasta qué fila máxima puede sentarse (ideal para problemas visuales o de atención).</span></li>
@@ -1297,7 +1465,7 @@
                                         <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center shrink-0 font-black text-base sm:text-lg">5</div>
                                         <div>
                                             <h4 class="font-bold text-slate-800 text-base sm:text-lg mb-1">Exportar y Guardar</h4>
-                                            <p class="text-xs sm:text-sm text-slate-600">Cuando termines, usa <b>"Descargar PDF"</b> para tener tu mapa listo para imprimir. Es muy importante que uses el botón <b>"Guardar"</b> de la barra superior para guardar toda tu clase en un archivo que podrás <b>"Abrir"</b> otro día o compartir con otro profesor.</p>
+                                            <p class="text-xs sm:text-sm text-slate-600">Cuando termines, usa <b>"Descargar Imagen"</b> o <b>"Descargar PDF"</b> en la barra superior del mapa. En ambos casos se abrirá un popup para elegir entre <b>Visión Profesor</b>, <b>Visión Estudiante</b> o <b>Ambas visiones</b>. Es muy importante que uses el botón <b>"Guardar"</b> de la barra superior para guardar toda tu clase en un archivo que podrás <b>"Abrir"</b> otro día o compartir con otro profesor.</p>
                                         </div>
                                     </div>
 
@@ -1310,9 +1478,64 @@
                     `;
                 }
                 
+
+
+                if (this.state.showImageExportModal) {
+                    const isPdfExport = this.state.exportFormat === 'pdf';
+                    html += `
+                        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+                            <div role="dialog" aria-modal="true" aria-label="Elegir visión de exportación" class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90dvh] overflow-y-auto transform transition-all">
+                                <div class="p-6 ${isPdfExport ? 'bg-emerald-600' : 'bg-sky-600'} text-white flex justify-between items-center">
+                                    <div>
+                                        <h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="${isPdfExport ? 'file-text' : 'image-down'}" class="w-6 h-6"></i> ${isPdfExport ? 'Descargar PDF del Salagrama' : 'Descargar imagen del Salagrama'}</h3>
+                                        <p class="${isPdfExport ? 'text-emerald-100' : 'text-sky-100'} text-sm">Selecciona una opción para descargar. Los ejemplos muestran cómo cambia la posición del puesto A.</p>
+                                    </div>
+                                    <button onclick="App.closeExportModal()" class="p-2 hover:bg-white/10 rounded-full transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
+                                </div>
+                                <div class="p-6 bg-slate-50">
+                                    <div class="grid md:grid-cols-3 gap-4">
+                                        <button onclick="App.startExport('teacher')" class="text-left bg-white border border-slate-200 hover:border-violet-400 hover:shadow-lg rounded-2xl p-5 transition-all group">
+                                            <div class="flex items-start justify-between gap-4 mb-3">
+                                                <div class="w-12 h-12 rounded-2xl bg-violet-100 text-violet-700 flex items-center justify-center shrink-0"><i data-lucide="presentation" class="w-6 h-6"></i></div>
+                                                <span class="text-[10px] font-black uppercase tracking-widest text-violet-700 bg-violet-50 border border-violet-200 px-2 py-1 rounded-full">Frente al curso</span>
+                                            </div>
+                                            <h4 class="font-black text-slate-800 text-lg mb-1">Visión Profesor</h4>${this.miniRoom('teacher')}
+                                            <p class="text-sm text-slate-600 mb-4">Exporta el mapa como si estuvieras de frente a los estudiantes, con la pizarra a tu espalda.</p>
+                                            <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500 font-medium">Ideal para que el plano coincida con tu ubicación al momento de enseñar.</div>
+                                        </button>
+
+                                        <button onclick="App.startExport('student')" class="text-left bg-white border border-slate-200 hover:border-indigo-400 hover:shadow-lg rounded-2xl p-5 transition-all group">
+                                            <div class="flex items-start justify-between gap-4 mb-3">
+                                                <div class="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0"><i data-lucide="school" class="w-6 h-6"></i></div>
+                                                <span class="text-[10px] font-black uppercase tracking-widest text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-1 rounded-full">Vista clásica</span>
+                                            </div>
+                                            <h4 class="font-black text-slate-800 text-lg mb-1">Visión Estudiante</h4>${this.miniRoom('student')}
+                                            <p class="text-sm text-slate-600 mb-4">Exporta el mapa con la pizarra al frente, tal como normalmente se muestra en el salagrama.</p>
+                                            <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500 font-medium">Ideal para compartir una representación tradicional del aula.</div>
+                                        </button>
+
+                                        <button onclick="App.startExport('both')" class="text-left bg-white border border-slate-200 hover:border-amber-400 hover:shadow-lg rounded-2xl p-5 transition-all group">
+                                            <div class="flex items-start justify-between gap-4 mb-3">
+                                                <div class="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0"><i data-lucide="copy-plus" class="w-6 h-6"></i></div>
+                                                <span class="text-[10px] font-black uppercase tracking-widest text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-full">Todo en una acción</span>
+                                            </div>
+                                            <h4 class="font-black text-slate-800 text-lg mb-1">Ambas visiones</h4><div class="grid grid-cols-2 gap-1">${this.miniRoom('teacher')}${this.miniRoom('student')}</div>
+                                            <p class="text-sm text-slate-600 mb-4">Genera las dos orientaciones para que no tengas que exportar dos veces.</p>
+                                            <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500 font-medium">${isPdfExport ? 'Descarga un solo PDF con dos páginas: Profesor y Estudiante.' : 'Descarga dos imágenes PNG: una en visión profesor y otra en visión estudiante.'}</div>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="p-4 bg-white border-t border-slate-200 flex justify-end">
+                                    <button onclick="App.closeExportModal()" class="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all">Cancelar</button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
                 if (this.state.restrictingStudent) {
                     const rs = this.state.restrictingStudent;
-                    const filteredStudents = this.state.students.filter(s => s.id !== rs.id && s.name.toLowerCase().includes(this.state.restrictionSearchTerm.toLowerCase()));
+                    const filteredStudents = this.state.students.filter(s => s.id !== rs.id && fold(s.name).includes(fold(this.state.restrictionSearchTerm)));
                     
                     html += `
                         <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1320,7 +1543,7 @@
                                 <div class="p-6 bg-indigo-600 text-white flex justify-between items-center shrink-0">
                                     <div>
                                         <h3 class="text-xl font-bold">Restricciones</h3>
-                                        <p class="text-indigo-100 text-sm">¿Con quién NO debe sentarse ${rs.name}?</p>
+                                        <p class="text-indigo-100 text-sm">¿Con quién NO debe sentarse ${esc(rs.name)}?</p>
                                     </div>
                                     <button onclick="App.closeRestrictionModal()" class="p-2 hover:bg-white/10 rounded-full transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
                                 </div>
@@ -1328,7 +1551,7 @@
                                 <div class="p-4 border-b border-slate-100 bg-slate-50 shrink-0">
                                     <div class="relative">
                                         <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4"></i>
-                                        <input type="text" id="restrictionSearchInput" placeholder="Buscar estudiante..." value="${this.state.restrictionSearchTerm}" oninput="App.setRestrictionSearchTerm(this.value)" class="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all text-slate-700" />
+                                        <input type="text" id="restrictionSearchInput" placeholder="Buscar estudiante..." value="${esc(this.state.restrictionSearchTerm)}" oninput="App.setRestrictionSearchTerm(this.value)" class="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all text-slate-700" />
                                         ${this.state.restrictionSearchTerm ? `<button onclick="App.setRestrictionSearchTerm('')" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>` : ''}
                                     </div>
                                 </div>
@@ -1348,7 +1571,7 @@
 
                                         return `
                                             <div class="w-full flex items-center justify-between p-2 rounded-xl border-2 transition-all ${isAll ? 'bg-red-50 border-red-200' : isSame ? 'bg-orange-50 border-orange-200' : 'bg-slate-50 border-transparent'}">
-                                                <span class="font-medium text-slate-700 ml-2 text-sm">${s.name}</span>
+                                                <span class="font-medium text-slate-700 ml-2 text-sm">${esc(s.name)}</span>
                                                 <div class="flex items-center gap-1">
                                                     <button onclick="App.setRestriction('${s.id}', ${isSame ? 'null' : "'same'"})" class="px-2 sm:px-3 py-1.5 text-[9px] sm:text-[10px] font-bold rounded-lg transition-all ${isSame ? 'bg-orange-500 text-white shadow-md' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}">BANCO</button>
                                                     <button onclick="App.setRestriction('${s.id}', ${isAll ? 'null' : "'all'"})" class="px-2 sm:px-3 py-1.5 text-[9px] sm:text-[10px] font-bold rounded-lg transition-all ${isAll ? 'bg-red-500 text-white shadow-md' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'}">ALREDEDOR</button>
@@ -1371,7 +1594,7 @@
                                 <div class="p-6 bg-amber-500 text-white flex justify-between items-center">
                                     <div>
                                         <h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="arrow-down-to-line" class="w-6 h-6"></i> Sentar Hasta</h3>
-                                        <p class="text-amber-50 text-sm">Determina la fila máxima para ${ls.name}</p>
+                                        <p class="text-amber-50 text-sm">Determina la fila máxima para ${esc(ls.name)}</p>
                                     </div>
                                     <button onclick="App.updateState({limitStudent: null})" class="p-2 hover:bg-white/10 rounded-full transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
                                 </div>
@@ -1417,7 +1640,7 @@
                                 <form onsubmit="App.saveStudentName(event)" class="p-6 space-y-4">
                                     <div>
                                         <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Nombre del Estudiante</label>
-                                        <input type="text" id="editStudentNameInput" value="${this.state.editNameStudent.name}" class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 outline-none text-slate-700 font-bold transition-all" />
+                                        <input type="text" id="editStudentNameInput" value="${esc(this.state.editNameStudent.name)}" class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 outline-none text-slate-700 font-bold transition-all" />
                                     </div>
                                     <div class="flex gap-3 pt-2">
                                         <button type="button" onclick="App.closeEditNameModal()" class="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all">Cancelar</button>
@@ -1462,7 +1685,7 @@
                 let renderedExtraRows = 0; 
                 
                 while (true) {
-                    if (created >= Math.max(1, targetSeats)) {
+                    if (created >= Math.max(1, targetSeats) && r >= Math.max(0,...Object.keys(this.state.assignments).map(k=>Number(k.split("-")[0])+1))) {
                         if (!this.state.editMode) break;
                         if (renderedExtraRows >= 2) break;
                         renderedExtraRows++;
@@ -1470,10 +1693,10 @@
 
                     const isRowAisle = this.state.rowAisles && this.state.rowAisles.includes(r);
                     
-                    let rowHeader = `<div class="flex items-center justify-center pr-2 font-bold text-slate-400 text-sm select-none my-2 sm:my-3">${isRowAisle ? '' : visualRowLabel}</div>`;
+                    let rowHeader = `<div data-export-upright="true" class="flex items-center justify-center pr-2 font-bold text-slate-400 text-sm select-none my-2 sm:my-3">${isRowAisle ? '' : visualRowLabel}</div>`;
                     if (this.state.editMode) {
                         rowHeader = `
-                            <div class="flex items-center justify-center pr-2 my-2 sm:my-3">
+                            <div data-export-upright="true" class="flex items-center justify-center pr-2 my-2 sm:my-3">
                                 <button onclick="App.toggleRowAisle(${r})" title="${isRowAisle ? 'Quitar pasillo' : 'Insertar pasillo'}" class="px-2 py-1.5 text-[9px] font-black rounded-lg transition-all shadow-sm ${isRowAisle ? 'bg-red-500 text-white hover:bg-red-600 shadow-red-200 ring-2 ring-red-200' : 'bg-white border-2 border-slate-200 text-slate-400 hover:border-indigo-400 hover:text-indigo-500'}">
                                     ${isRowAisle ? 'QUITAR' : '+ PASILLO'}
                                 </button>
@@ -1486,7 +1709,7 @@
                     if (isRowAisle) {
                         gridHtml += `
                             <div style="grid-column: span ${totalGridCols};" class="w-full flex items-center justify-center my-2 sm:my-3">
-                                <div class="w-full h-10 sm:h-14 bg-slate-200/40 rounded-lg flex items-center justify-center relative">
+                                <div data-export-upright="true" class="w-full h-10 sm:h-14 bg-slate-200/40 rounded-lg flex items-center justify-center relative">
                                     <span class="text-slate-400 text-[10px] font-black tracking-widest uppercase">PASILLO HORIZONTAL</span>
                                 </div>
                             </div>
@@ -1504,7 +1727,7 @@
                         if (isColAisle) {
                             gridHtml += `
                                 <div class="w-full h-full flex items-center justify-center">
-                                    <div class="w-full bg-slate-200/40 rounded-lg min-h-[80px] sm:min-h-[96px] relative mx-1 my-2 sm:mx-1.5 sm:my-3 flex items-center justify-center">
+                                    <div data-export-upright="true" class="w-full bg-slate-200/40 rounded-lg min-h-[80px] sm:min-h-[96px] relative mx-1 my-2 sm:mx-1.5 sm:my-3 flex items-center justify-center">
                                         ${visualRowLabel === 1 ? '<span class="text-slate-400 text-[10px] font-black tracking-widest absolute top-1/2 -translate-y-1/2" style="writing-mode: vertical-rl; transform: rotate(180deg);">PASILLO</span>' : ''}
                                     </div>
                                 </div>
@@ -1555,7 +1778,7 @@
                         if (this.state.hiddenDesks[sId]) {
                             gridHtml += `
                                 <div class="w-full h-full flex items-center justify-center">
-                                    <div onclick="App.toggleDeskVisibility('${sId}')" class="w-20 h-20 sm:w-24 sm:h-24 flex items-center justify-center transition-all ${deskMargin} ${deskRounding} ${this.state.editMode ? 'bg-slate-200 border-2 border-dashed border-slate-300 cursor-pointer hover:bg-indigo-50 hover:border-indigo-300' : 'opacity-0 pointer-events-none'}">
+                                    <div data-export-upright="true" onclick="App.toggleDeskVisibility('${sId}')" class="w-20 h-20 sm:w-24 sm:h-24 flex items-center justify-center transition-all ${deskMargin} ${deskRounding} ${this.state.editMode ? 'bg-slate-200 border-2 border-dashed border-slate-300 cursor-pointer hover:bg-indigo-50 hover:border-indigo-300' : 'opacity-0 pointer-events-none'}">
                                         ${this.state.editMode ? '<span class="text-slate-400 text-[9px] font-bold text-center leading-tight">PUESTO<br>NULO</span>' : ''}
                                     </div>
                                 </div>
@@ -1566,7 +1789,7 @@
                             const s = this.state.students.find(item => item.id === stuId);
                             const isConflict = conflicts.has(sId);
                             const isWarning = warnings.has(sId);
-                            const isHighlighted = this.state.searchTerm.trim() !== '' && s && s.name.toLowerCase().includes(this.state.searchTerm.toLowerCase());
+                            const isHighlighted = this.state.searchTerm.trim() !== '' && s && fold(s.name).includes(fold(this.state.searchTerm));
                             
                             const bgClass = isHighlighted ? 'bg-blue-50 border-blue-500 ring-4 ring-blue-200 z-10 scale-105 shadow-lg border-2' : `bg-white border-2 shadow-sm ${isConflict ? 'border-red-600 ring-4 ring-red-100' : isWarning ? 'border-amber-500 ring-4 ring-amber-100' : 'border-indigo-200'}`;
                             const topBarClass = isHighlighted ? 'bg-blue-500' : isConflict ? 'bg-red-600' : isWarning ? 'bg-amber-500' : 'bg-indigo-300';
@@ -1579,7 +1802,7 @@
 
                             gridHtml += `
                                 <div class="w-full h-full flex items-center justify-center">
-                                    <div onclick="App.toggleDeskVisibility('${sId}')" ondragover="event.preventDefault()" ondrop="if(!App.state.editMode) App.handleDropOnSeat(event, '${sId}')" class="group w-20 h-20 sm:w-24 sm:h-24 transition-all relative flex flex-col items-center justify-center p-2 text-center select-none ${deskMargin} ${deskRounding} ${this.state.editMode ? 'cursor-pointer hover:ring-2 hover:ring-red-400 bg-white border-2 border-indigo-200 shadow-sm' : bgClass}">
+                                    <div onclick="App.selectSeat('${sId}')" tabindex="0" role="button" onkeydown="if(event.target===this&&(event.key==='Enter'||event.key===' ')){event.preventDefault();App.selectSeat('${sId}')}" ondragover="event.preventDefault()" ondrop="if(!App.state.editMode) App.handleDropOnSeat(event, '${sId}')" data-export-upright="true" class="${s && this.selectedStudent===s.id ? 'ring-4 ring-blue-500' : ''} group w-20 h-20 sm:w-24 sm:h-24 transition-all relative flex flex-col items-center justify-center p-2 text-center select-none ${deskMargin} ${deskRounding} ${this.state.editMode ? 'cursor-pointer hover:ring-2 hover:ring-red-400 bg-white border-2 border-indigo-200 shadow-sm' : bgClass}">
                                         <div class="absolute top-0 inset-x-0 h-2 ${topBarRounding} ${topBarClass}"></div>
                                         
                                         ${s && !this.state.editMode ? `
@@ -1594,10 +1817,10 @@
                                         ${s ? `
                                             <div draggable="${!this.state.editMode && !s.isLocked}" ondragstart="App.handleDragStart(event, '${s.id}', '${sId}')" class="w-full h-full flex flex-col items-center justify-center pt-1 overflow-hidden ${s.isLocked ? 'cursor-default' : ''}">
                                                 <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center font-bold mb-0.5 sm:mb-1 shadow-inner text-xs shrink-0 ${avatarClass}">
-                                                    ${isWarning && !isConflict && !isHighlighted ? `<i data-lucide="arrow-down-to-line" class="w-3.5 h-3.5"></i>` : s.name.charAt(0).toUpperCase()}
+                                                    ${isWarning && !isConflict && !isHighlighted ? `<i data-lucide="arrow-down-to-line" class="w-3.5 h-3.5"></i>` : esc(s.name.charAt(0).toUpperCase())}
                                                 </div>
                                                 <div class="w-full flex-1 flex items-center justify-center overflow-hidden px-0.5">
-                                                    <span class="font-bold leading-[1.1] text-center w-full break-words ${adaptiveTextSize} ${nameClass}" style="word-break: break-word">${s.name}</span>
+                                                    <span class="font-bold leading-[1.1] text-center w-full break-words ${adaptiveTextSize} ${nameClass}" style="word-break: break-word">${esc(s.name)}</span>
                                                 </div>
                                             </div>
                                         ` : `
@@ -1621,23 +1844,23 @@
 
                 return `
                     <!-- SIDEBAR -->
-                    <div id="sidebar-scroll-container" class="w-full md:w-80 bg-white border-r border-slate-200 shadow-sm flex flex-col h-full shrink-0 z-10 overflow-y-auto no-scrollbar">
-                        <div class="p-6 border-b border-slate-100 bg-indigo-600 text-white hidden md:block shrink-0">
-                            <h1 class="text-xl font-bold flex items-center gap-2">Configuración</h1>
-                            <p class="text-indigo-100 text-sm mt-1">Organización de la sala</p>
+                    <div id="sidebar-scroll-container" class="w-full md:w-80 bg-white border-r border-slate-200 shadow-sm flex flex-col h-full shrink-0 z-10 overflow-y-auto">
+                        <div class="px-4 py-3 border-b border-slate-100 bg-indigo-600 text-white shrink-0">
+                            <h1 class="text-base font-bold flex items-center gap-2">Configuración de la sala</h1>
+                            <p class="text-indigo-100 text-xs mt-1">Los cambios se reflejan en el mapa.</p>
                         </div>
-                        <div class="flex-1 p-4 flex flex-col">
-                            
+                        <div class="flex-1 p-3 flex flex-col">
+                            ${!this.state.students.length?`<div class="mb-3 bg-indigo-50 border border-indigo-100 rounded-xl p-3 text-xs text-indigo-900">Primero añade estudiantes. <button onclick="App.setTab('lista')" class="font-bold underline">Ir a la lista</button></div>`:''}
                             <!-- NUEVO DISEÑO DE CONFIGURACIÓN PASO A PASO -->
-                            <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200 shadow-sm space-y-5 mb-6">
+                            <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 shadow-sm space-y-3 mb-2">
                                 
                                 <!-- Paso 1 -->
                                 <div>
                                     <h3 class="text-xs font-black text-slate-800 mb-1.5 flex items-center gap-2">
                                         <span class="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px]">1</span> 
-                                        Ancho de la Sala
+                                        Mesas por fila
                                     </h3>
-                                    <p class="text-[10px] text-slate-500 mb-2 leading-relaxed ml-7">¿Cuántas mesas hay de lado a lado en total? (No cuentes los pasillos aún).</p>
+                                    <p class="text-[10px] text-slate-500 mb-2 leading-relaxed ml-7">Número de mesas de lado a lado, sin contar pasillos.</p>
                                     <div class="ml-7 flex items-center gap-2 bg-white border border-slate-300 rounded-xl p-1.5 focus-within:ring-2 focus-within:ring-indigo-500 transition-all shadow-sm">
                                         <input type="number" id="colsInput" min="1" max="20" value="${this.state.cols}" onchange="App.setCols(this.value)" class="w-full bg-transparent text-sm font-black text-center text-indigo-700 outline-none" />
                                         <span class="text-[10px] font-bold text-slate-400 pr-3 uppercase tracking-wider">mesas</span>
@@ -1645,12 +1868,12 @@
                                 </div>
 
                                 <!-- Paso 2 -->
-                                <div class="pt-4 border-t border-slate-200">
+                                <div class="pt-3 border-t border-slate-200">
                                     <h3 class="text-xs font-black text-slate-800 mb-1.5 flex items-center gap-2">
                                         <span class="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px]">2</span> 
                                         Pasillos Automáticos
                                     </h3>
-                                    <p class="text-[10px] text-slate-500 mb-3 leading-relaxed ml-7">Separa las mesas insertando columnas vacías rápidamente.</p>
+                                    <p class="text-[10px] text-slate-500 mb-3 leading-relaxed ml-7">Ejemplo: cada 2 mesas crea un pasillo tras cada pareja.</p>
                                     
                                     <div class="ml-7 grid grid-cols-2 gap-2 mb-3">
                                         <div class="bg-white p-2.5 border border-slate-200 rounded-xl shadow-sm">
@@ -1674,10 +1897,10 @@
                                 </div>
 
                                 <!-- Paso 3 -->
-                                <div class="pt-4 border-t border-slate-200">
+                                <div class="pt-3 border-t border-slate-200">
                                     <h3 class="text-xs font-black text-slate-800 mb-1.5 flex items-center gap-2">
                                         <span class="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px]">3</span> 
-                                        Formato Visual
+                                        Agrupación de mesas
                                     </h3>
                                     <p class="text-[10px] text-slate-500 mb-2 leading-relaxed ml-7">¿Cómo están agrupados los puestos físicamente?</p>
                                     <div class="ml-7 relative">
@@ -1692,7 +1915,7 @@
                                 </div>
 
                                 <!-- Paso 4 (Opcional) -->
-                                <div class="pt-4 border-t border-slate-200">
+                                <div class="pt-3 border-t border-slate-200">
                                     <div class="flex items-start gap-3 bg-${this.state.editMode ? 'indigo-50' : 'white'} p-3 rounded-xl border ${this.state.editMode ? 'border-indigo-300 ring-2 ring-indigo-100' : 'border-slate-200'} transition-all shadow-sm">
                                         <div class="mt-0.5 shrink-0">
                                             <label class="relative inline-flex items-center cursor-pointer">
@@ -1701,8 +1924,8 @@
                                             </label>
                                         </div>
                                         <div class="flex-1">
-                                            <h4 class="text-[11px] font-black text-slate-800 uppercase tracking-wide">Edición Manual Avanzada</h4>
-                                            <p class="text-[9px] text-slate-500 mt-1 leading-relaxed">Actívalo para hacer clic en el mapa y borrar escritorios individuales (nulos) o agregar pasillos fila por fila.</p>
+                                            <h4 class="text-[11px] font-black text-slate-800 uppercase tracking-wide">Editar forma de la sala (opcional)</h4>
+                                            <p class="text-[9px] text-slate-500 mt-1 leading-relaxed">Oculta o restaura mesas y añade pasillos. Desactiva para mover estudiantes.</p>
                                         </div>
                                     </div>
                                     
@@ -1719,22 +1942,31 @@
                                 </div>
                             </div>
                             
-                            <div class="space-y-3 mb-6 shrink-0 mt-auto">
-                                <button onclick="App.handleRandomize()" class="flex items-center justify-center gap-2 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95">
-                                    <i data-lucide="shuffle" class="w-5 h-5"></i> Mezcla Inteligente
-                                </button>
-                                <button onclick="App.handleDownloadPDF()" ${this.state.isExporting || this.state.students.length === 0 ? 'disabled' : ''} class="flex items-center justify-center gap-2 w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-emerald-200 transition-all active:scale-95">
-                                    ${this.state.isExporting ? `<i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i>` : `<i data-lucide="download" class="w-5 h-5"></i>`}
-                                    Descargar PDF
-                                </button>
-                            </div>
                         </div>
                     </div>
 
                     <!-- MAPA -->
-                    <div class="flex-1 bg-slate-100 flex flex-col h-full overflow-hidden relative">
+                    <div class="flex-1 min-h-0 bg-slate-100 flex flex-col h-full overflow-hidden relative">
+                        <!-- Acciones de distribución y descarga, fuera de la configuración -->
+                        <div class="map-toolbar" role="toolbar" aria-label="Acciones del salagrama">
+                            <div class="flex items-center gap-3 flex-wrap flex-1 min-w-0">
+                                <span class="text-xs font-black text-slate-600 uppercase tracking-wider shrink-0">Mapa del aula</span>
+                                <div class="relative w-full max-w-[220px]">
+                                    <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5"></i>
+                                    <input type="text" id="salagramaSearchInput" placeholder="Buscar alumno..." value="${esc(this.state.searchTerm)}" oninput="App.setSearchTerm(this.value)" class="w-full pl-8 pr-8 py-1.5 bg-white border border-slate-200 rounded-full text-xs focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all text-slate-700" />
+                                    ${this.state.searchTerm ? `<button onclick="App.setSearchTerm('')" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>` : ''}
+                                </div>
+                            </div>
+                            <div class="map-actions">
+                                <button id="shuffleAction" onclick="App.handleRandomize()" ${!this.state.students.length?'disabled':''} class="map-action bg-indigo-600 hover:bg-indigo-700" title="Distribuye estudiantes respetando restricciones y puestos bloqueados"><i data-lucide="shuffle" class="w-4 h-4"></i> Mezcla inteligente</button>
+                                <button id="imageExportAction" onclick="App.openExportModal('image')" ${this.state.isExporting || !this.state.students.length ? 'disabled' : ''} class="map-action bg-sky-600 hover:bg-sky-700" title="Descargar imagen PNG: elige la perspectiva">${this.state.isExporting ? '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>' : '<i data-lucide="image-down" class="w-4 h-4"></i>'} Descargar Imagen</button>
+                                <button id="pdfExportAction" onclick="App.openExportModal('pdf')" ${this.state.isExporting || !this.state.students.length ? 'disabled' : ''} class="map-action bg-emerald-600 hover:bg-emerald-700" title="Descargar PDF: elige la perspectiva">${this.state.isExporting ? '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>' : '<i data-lucide="file-down" class="w-4 h-4"></i>'} Descargar PDF</button>
+                            </div>
+                        </div>
+
+                        <div class="shrink-0 px-4 py-2 bg-white border-b text-xs text-slate-600 flex flex-wrap gap-3"><b>${Object.keys(this.state.assignments).length} ubicados</b><span>${benchedList.length} sin puesto</span><span>${conflicts.size} en conflicto</span><span>${warnings.size} fuera de fila</span></div><div class="shrink-0 px-4 py-2 bg-indigo-50 border-b border-indigo-100 text-xs text-indigo-900 flex flex-wrap items-center gap-x-4 gap-y-1"><span><b>${this.state.editMode?'Modo edición activo:':this.selectedStudent?'Estudiante seleccionado:':'Mover puestos:'}</b> ${this.state.editMode?'pulsa una mesa para ocultarla o restaurarla.':this.selectedStudent?'pulsa el puesto de destino o Escape para cancelar.':'arrastra un estudiante o pulsa su nombre y después el nuevo puesto.'}</span><span class="flex items-center gap-1"><i data-lucide="lock" class="w-3.5 h-3.5"></i> Candado: fija el puesto</span><span class="text-red-700">Rojo: conflicto</span><span class="text-amber-700">Ámbar: límite de fila</span><button onclick="App.updateState({showGuide:true})" class="ml-auto font-bold underline">Ver ayuda</button></div>
                         <!-- Alertas -->
-                        <div class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex flex-col gap-2 items-center">
+                        <div class="${(conflicts.size || warnings.size) && !this.state.editMode ? 'flex' : 'hidden'} shrink-0 flex-wrap gap-2 items-center px-4 py-2 bg-white border-b border-slate-200" role="status">
                             ${conflicts.size > 0 && !this.state.editMode ? `
                                 <div class="bg-red-600 text-white px-6 py-2 rounded-full shadow-2xl flex items-center gap-3 border-2 border-white animate-bounce">
                                     <i data-lucide="alert-triangle" class="w-5 h-5 animate-pulse"></i>
@@ -1747,19 +1979,6 @@
                                     <span class="font-black text-xs uppercase tracking-tighter">Fuera de fila permitida</span>
                                 </div>
                             ` : ''}
-                        </div>
-
-                        <!-- Topbar Salagrama -->
-                        <div class="h-12 bg-white/50 flex items-center justify-between px-4 sm:px-8 border-b border-slate-200 shrink-0">
-                            <div class="flex-1 hidden sm:block"></div>
-                            <span class="text-xs font-bold text-slate-400 uppercase tracking-widest shrink-0 text-center flex-1 sm:flex-none">Mapa del Aula</span>
-                            <div class="flex-1 flex justify-end">
-                                <div class="relative w-full max-w-[220px]">
-                                    <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5"></i>
-                                    <input type="text" id="salagramaSearchInput" placeholder="Buscar alumno..." value="${this.state.searchTerm}" oninput="App.setSearchTerm(this.value)" class="w-full pl-8 pr-8 py-1.5 bg-white border border-slate-200 rounded-full text-xs focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all text-slate-700" />
-                                    ${this.state.searchTerm ? `<button onclick="App.setSearchTerm('')" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>` : ''}
-                                </div>
-                            </div>
                         </div>
 
                         <!-- Bandeja de Estudiantes en Espera (Horizontal Top) -->
@@ -1776,10 +1995,10 @@
                                 </div>
                                 <div class="flex gap-2 overflow-x-auto pb-2 px-2 custom-scrollbar">
                                     ${benchedList.map(s => `
-                                        <div draggable="true" ondragstart="App.handleDragStart(event, '${s.id}', '')" class="bg-white px-3 py-2 rounded-lg border border-amber-200 shadow-sm flex items-center gap-2 cursor-grab hover:border-amber-400 hover:shadow-md transition-all group shrink-0 w-48">
+                                        <div tabindex="0" role="button" onclick="App.selectBench('${s.id}')" onkeydown="if(event.key==='Enter'){App.selectBench('${s.id}')}" draggable="true" ondragstart="App.handleDragStart(event, '${s.id}', '')" class="bg-white px-3 py-2 rounded-lg border border-amber-200 shadow-sm flex items-center gap-2 cursor-grab hover:border-amber-400 hover:shadow-md transition-all group shrink-0 w-48">
                                             <i data-lucide="grip-vertical" class="w-4 h-4 text-slate-300 group-hover:text-amber-500"></i>
-                                            <div class="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 font-black text-[10px] shrink-0">${s.name.charAt(0).toUpperCase()}</div>
-                                            <span class="text-xs font-bold text-slate-700 truncate">${s.name}</span>
+                                            <div class="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 font-black text-[10px] shrink-0">${esc(s.name.charAt(0).toUpperCase())}</div>
+                                            <span class="text-xs font-bold text-slate-700 truncate">${esc(s.name)}</span>
                                         </div>
                                     `).join('')}
                                 </div>
@@ -1789,20 +2008,15 @@
                         <!-- Canvas PDF -->
                         <div id="map-scroll-container" class="flex-1 overflow-auto p-8 flex justify-center items-start">
                             <div id="salagrama-map" class="inline-flex flex-col items-center p-8 bg-slate-50 rounded-2xl min-w-max min-h-max border border-slate-100 shadow-sm">
-                                <div class="w-full max-w-2xl flex justify-between items-end mb-6 px-2 border-b-2 border-slate-200 pb-3">
-                                    <h2 class="text-2xl font-black text-slate-800 tracking-tight uppercase">${this.state.courseName || 'Mi Clase'}</h2>
+                                <div data-export-upright="true" class="w-full max-w-2xl flex justify-between items-end mb-6 px-2 border-b-2 border-slate-200 pb-3">
+                                    <h2 class="text-2xl font-black text-slate-800 tracking-tight uppercase">${esc(this.state.courseName || 'Mi Clase')}</h2>
                                     <p class="text-sm font-bold text-slate-500 flex items-center gap-2"><i data-lucide="calendar-days" class="w-4 h-4"></i> ${this.state.classDate ? this.state.classDate.split('-').reverse().join('/') : ''}</p>
                                 </div>
-                                <div class="w-full max-w-2xl bg-white border-b-4 border-indigo-600 shadow-sm rounded-t-xl mb-12 p-3 text-center text-indigo-700 font-black text-sm tracking-[0.3em]">
+                                <div data-export-upright="true" class="w-full max-w-2xl bg-white border-b-4 border-indigo-600 shadow-sm rounded-t-xl mb-12 p-3 text-center text-indigo-700 font-black text-sm tracking-[0.3em]">
                                     <i data-lucide="monitor-play" class="inline w-5 h-5 mr-2"></i> PIZARRA
                                 </div>
                                 <div class="grid gap-0 mx-auto px-4" style="grid-template-columns: ${templateCols}">
                                     ${gridHtml}
-                                </div>
-                                
-                                <!-- FIRMA EN EL PDF / FONDO DEL MAPA -->
-                                <div class="mt-16 w-full text-center text-[9px] font-black text-slate-300 uppercase tracking-widest select-none pb-4" data-html2canvas-ignore="false">
-                                    Creado por el profesor Victor Acevedo C.
                                 </div>
                             </div>
                         </div>
@@ -1816,12 +2030,13 @@
                         <div class="max-w-4xl mx-auto space-y-8">
                             <div class="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-8">
                                 <div class="flex flex-col items-start">
-                                    <h2 class="text-3xl font-black text-slate-800 tracking-tight">Directorio</h2>
-                                    <p class="text-slate-500 font-medium mb-6">Gestiona ${this.state.students.length} estudiantes y sus preferencias.</p>
+                                    <p class="text-xs font-bold text-indigo-600 mb-2 uppercase tracking-widest">Paso 1 · Preparar lista</p>
+                                    <h2 class="text-3xl font-black text-slate-800 tracking-tight">Mi curso</h2>
+                                    <p class="text-slate-500 font-medium mb-4">${this.state.students.length ? `${this.state.students.length} estudiantes añadidos. Puedes ajustar sus necesidades o continuar al mapa.` : 'Agrega tu lista de estudiantes para comenzar. Puedes escribir nombres, pegarlos o importar Excel.'}</p>
                                     
                                     <div class="flex flex-wrap items-center gap-3">
                                         <button onclick="App.setTab('salagrama')" class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all active:scale-95">
-                                            Ir a mi sala <i data-lucide="arrow-right" class="w-5 h-5"></i>
+                                            Organizar mi sala <i data-lucide="arrow-right" class="w-5 h-5"></i>
                                         </button>
                                         <button onclick="App.handleDeleteAll()" class="flex items-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-4 py-3 rounded-xl font-bold transition-all active:scale-95" title="Borrar toda la lista">
                                             <i data-lucide="trash-2" class="w-5 h-5"></i> <span class="hidden sm:inline">Borrar lista</span>
@@ -1830,12 +2045,13 @@
                                 </div>
                                 <div class="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex flex-col gap-3 w-full max-w-sm">
                                     <div class="flex items-center justify-between">
-                                        <div class="flex items-center gap-2 text-emerald-800 font-bold"><i data-lucide="file-spreadsheet" class="w-5 h-5 text-emerald-600"></i> Importar CSV / XLSX</div>
+                                        <div class="flex items-center gap-2 text-emerald-800 font-bold"><i data-lucide="file-spreadsheet" class="w-5 h-5 text-emerald-600"></i> Importar lista Excel / CSV</div>
                                         <label class="cursor-pointer ${this.state.isImporting ? 'bg-emerald-400' : 'bg-emerald-600 hover:bg-emerald-700'} text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2">
                                             ${this.state.isImporting ? `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>` : `<i data-lucide="upload" class="w-4 h-4"></i>`}
-                                            <input type="file" accept=".xlsx, .xls, .csv" class="hidden" onchange="App.handleFileUpload(this)" ${this.state.isImporting ? 'disabled' : ''} />
+                                            <span class="text-xs">Elegir archivo</span><input type="file" accept=".xlsx, .xls, .csv" class="hidden" onchange="App.handleFileUpload(this)" ${this.state.isImporting ? 'disabled' : ''} />
                                         </label>
                                     </div>
+                                    <p class="text-xs text-emerald-800">Sube tu archivo con los nombres. Los estudiantes importados se añaden a la lista actual.</p>
                                     ${this.state.importMessage.text ? `<div class="text-xs font-bold ${this.state.importMessage.type === 'success' ? 'text-emerald-700' : 'text-red-600'}">${this.state.importMessage.text}</div>` : ''}
                                     
                                     <div class="pt-2 mt-1 border-t border-emerald-200/60">
@@ -1867,11 +2083,16 @@
                                 </div>
                                 <div class="flex-1">
                                     <label class="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-2"><i data-lucide="calendar-days" class="w-4 h-4"></i> Fecha</label>
-                                    <input type="date" id="classDateInput" value="${this.state.classDate}" onchange="App.setClassDate(this.value)" class="w-full border-2 border-slate-200 rounded-xl px-4 py-2 focus:border-indigo-500 outline-none text-sm font-medium transition-colors text-slate-700" />
+                                    <input type="date" id="classDateInput" value="${esc(this.state.classDate)}" onchange="App.setClassDate(this.value)" class="w-full border-2 border-slate-200 rounded-xl px-4 py-2 focus:border-indigo-500 outline-none text-sm font-medium transition-colors text-slate-700" />
                                 </div>
                             </div>
 
-                            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                                <div><h3 class="font-black text-lg">Añadir estudiantes</h3><p class="text-sm text-slate-500">Escribe un nombre y pulsa Añadir o Enter. Para varios nombres, usa Pegar lista.</p></div>
+                                <div class="flex flex-col sm:flex-row gap-2"><form onsubmit="App.handleAddStudent(event)" class="flex gap-2 flex-1 min-w-0"><input aria-label="Nombre del estudiante" type="text" id="newStudentName" placeholder="Ej.: Ana Pérez" class="min-w-0 flex-1 bg-white border-2 border-slate-200 rounded-xl px-4 py-3 text-sm font-medium" required /><button type="submit" class="bg-indigo-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-indigo-700 flex items-center gap-1"><i data-lucide="plus" class="w-4 h-4"></i>Añadir</button></form><button onclick="App.updateState({showPaste:true})" class="flex items-center justify-center gap-2 border border-indigo-200 rounded-xl px-4 py-3 text-indigo-700 font-bold text-sm bg-indigo-50"><i data-lucide="clipboard-paste" class="w-4 h-4"></i>Pegar lista</button></div>
+                            </div>
+                            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
+                                <div class="p-5 border-b border-slate-200 flex flex-wrap items-center gap-3 justify-between"><div><h3 class="font-black text-lg">Lista de estudiantes (${this.state.students.length})</h3><p class="text-xs text-slate-500">Opcional: configura con quién no deben sentarse o la fila más lejana permitida.</p></div><input id="listSearch" aria-label="Buscar en la lista" value="${esc(this.state.listSearch)}" oninput="App.updateState({listSearch:this.value})" placeholder="Buscar estudiante…" class="border rounded-xl p-2 text-sm w-full sm:w-52" /></div>
                                 <table class="w-full text-left">
                                     <thead class="bg-slate-50/50 border-b border-slate-200">
                                         <tr class="text-slate-400 text-[10px] font-black uppercase tracking-widest">
@@ -1881,38 +2102,31 @@
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        ${this.state.students.map(s => `
+                                        ${this.state.students.filter(s=>fold(s.name).includes(fold(this.state.listSearch))).map(s => `
                                             <tr class="border-b border-slate-100 hover:bg-slate-50 transition-colors group">
                                                 <td class="p-6 font-bold text-slate-700 flex items-center gap-4">
-                                                    <div class="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-black text-sm shrink-0">${s.name.charAt(0).toUpperCase()}</div>
-                                                    <span class="truncate">${s.name}</span>
-                                                    <button onclick="App.openEditNameModal('${s.id}')" class="text-slate-400 sm:text-slate-300 hover:text-indigo-600 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-all p-1.5 rounded-lg hover:bg-indigo-50 shrink-0" title="Editar nombre">
+                                                    <div class="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-black text-sm shrink-0">${esc(s.name.charAt(0).toUpperCase())}</div>
+                                                    <span class="truncate">${esc(s.name)}</span>
+                                                    <button onclick="App.openEditNameModal('${s.id}')" class="text-slate-400 sm:text-slate-300 hover:text-indigo-600 opacity-100 transition-all p-1.5 rounded-lg hover:bg-indigo-50 shrink-0" title="Editar nombre">
                                                         <i data-lucide="pencil" class="w-4 h-4"></i>
                                                     </button>
                                                 </td>
                                                 <td class="p-6">
                                                     <div class="flex gap-2">
                                                         <button onclick="App.openRestrictionModal('${s.id}')" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${(Array.isArray(s.restrictions) ? s.restrictions.length : Object.keys(s.restrictions || {}).length) > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-slate-50 border-slate-100 text-slate-400'}">
-                                                            <i data-lucide="user-x" class="w-3.5 h-3.5"></i> ${Array.isArray(s.restrictions) ? s.restrictions.length : Object.keys(s.restrictions || {}).length} Restr.
+                                                            <i data-lucide="user-x" class="w-3.5 h-3.5"></i> ${Array.isArray(s.restrictions) ? s.restrictions.length : Object.keys(s.restrictions || {}).length} restricciones
                                                         </button>
                                                         <button onclick="App.openLimitModal('${s.id}')" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${s.maxRow ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-slate-50 border-slate-100 text-slate-400'}">
-                                                            <i data-lucide="arrow-down-to-line" class="w-3.5 h-3.5"></i> ${s.maxRow ? `Hasta Fila ${s.maxRow}` : 'Sin Límite'}
+                                                            <i data-lucide="arrow-down-to-line" class="w-3.5 h-3.5"></i> ${s.maxRow ? `Hasta Fila ${s.maxRow}` : 'Sin límite de fila'}
                                                         </button>
                                                     </div>
                                                 </td>
                                                 <td class="p-6 text-right">
-                                                    <button onclick="App.handleRemoveStudent('${s.id}')" class="text-slate-300 hover:text-red-500 p-2"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                                                    <button onclick="App.handleRemoveStudent('${s.id}')" title="Eliminar estudiante" aria-label="Eliminar estudiante" class="text-slate-500 hover:text-red-500 p-2"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
                                                 </td>
                                             </tr>
                                         `).join('')}
-                                        <tr class="bg-slate-50/30">
-                                            <td colspan="3" class="p-4">
-                                                <form onsubmit="App.handleAddStudent(event)" class="flex gap-2 max-w-md ml-2">
-                                                    <input type="text" id="newStudentName" placeholder="Nuevo estudiante..." class="flex-1 bg-white border-2 border-slate-200 rounded-xl px-4 py-2 focus:border-indigo-500 outline-none text-sm font-medium" />
-                                                    <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold hover:bg-indigo-700 transition-all"><i data-lucide="check" class="w-5 h-5"></i></button>
-                                                </form>
-                                            </td>
-                                        </tr>
+                                        ${!this.state.students.length ? `<tr><td colspan="3" class="text-center py-10 text-slate-500 text-sm">Todavía no hay estudiantes. Agrega el primer nombre arriba o importa una lista.</td></tr>` : !this.state.students.some(s=>fold(s.name).includes(fold(this.state.listSearch))) ? `<tr><td colspan="3" class="text-center py-8 text-slate-500 text-sm">No encontramos estudiantes con ese nombre.</td></tr>` : ''}
                                     </tbody>
                                 </table>
                             </div>
@@ -1928,7 +2142,65 @@
         // Iniciar la aplicación cuando cargue el DOM
         document.addEventListener('DOMContentLoaded', () => {
             App.init();
+            document.addEventListener('keydown',e=>{if(e.key==='Escape'){App.selectedStudent=null;App.updateState({showGuide:false,showWelcome:false,showPaste:false,showImageExportModal:false,restrictingStudent:null,limitStudent:null,editNameStudent:null,confirmDeleteAll:false});} if((e.ctrlKey||e.metaKey)&&!['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?App.redo():App.undo();}});
         });
     </script>
+
+    <!-- Apoyo voluntario: fuera de #app para conservar el botón al renderizar el mapa. -->
+    <dialog id="paypal-support-dialog" aria-labelledby="paypal-support-title" style="width:min(92vw,440px);max-height:90dvh;overflow:auto;border:0;border-radius:20px;padding:0;background:white;color:#1e293b;box-shadow:0 24px 80px #0f172a55">
+        <div class="p-6 bg-gradient-to-br from-rose-50 via-white to-indigo-50">
+            <div class="flex items-start justify-between gap-4">
+                <div><p class="text-xs font-bold uppercase tracking-wider text-indigo-600">Aporte voluntario · PayPal</p><h2 id="paypal-support-title" class="text-xl font-bold mt-1">Dona y apoya Salagrama</h2></div>
+                <button type="button" autofocus onclick="document.getElementById('paypal-support-dialog').close()" aria-label="Cerrar" class="rounded-lg px-3 py-1 text-2xl hover:bg-slate-100">&times;</button>
+            </div>
+            <p class="text-sm text-slate-600 mt-4 leading-relaxed">Salagrama es gratuito y seguirá disponible sin necesidad de donar. Si te resulta útil, puedes realizar una donación voluntaria a través de PayPal para apoyar su mantenimiento y el desarrollo de nuevas herramientas para docentes. Tú eliges el monto.</p>
+            <div class="mt-5 p-4 rounded-xl border border-slate-200 bg-white">
+                <p id="paypal-support-status" role="status" class="text-sm text-slate-500">Cargando PayPal…</p>
+                <div id="paypal-container-BLSCMKBK9VWRW"></div>
+                <button id="paypal-support-retry" type="button" hidden onclick="window.openPayPalSupport()" class="mt-3 text-sm font-bold text-indigo-700 underline">Reintentar</button>
+            </div>
+            <p class="text-center text-xs text-slate-500 mt-4">Monto libre · USD · Pago seguro mediante PayPal</p>
+        </div>
+    </dialog>
+    <style>#paypal-support-dialog::backdrop{background:#0f172a99;backdrop-filter:blur(3px)}</style>
+    <script>
+    (() => {
+        const dialog = document.getElementById('paypal-support-dialog');
+        const status = document.getElementById('paypal-support-status');
+        const retry = document.getElementById('paypal-support-retry');
+        const container = document.getElementById('paypal-container-BLSCMKBK9VWRW');
+        let loading = false, ready = false;
+        function loadSDK() {
+            if (window.paypal?.HostedButtons) return Promise.resolve();
+            return new Promise((resolve,reject) => {
+                const script = document.createElement('script');
+                script.src = 'https://www.paypal.com/sdk/js?client-id=BAAmBTG3gcj6ogfhh7kIEhyU9GIPlUqPxHIGkg1T5V_IR3SfMEYv8x-MtLBgZCiRTCWwaHLbtPH-ggK-70&components=hosted-buttons&disable-funding=venmo&currency=USD';
+                script.async = true;
+                const timer = setTimeout(() => {script.remove();reject(new Error('Tiempo de espera agotado'));}, 20000);
+                script.onload = () => {clearTimeout(timer);resolve();};
+                script.onerror = () => {clearTimeout(timer);script.remove();reject(new Error('PayPal no disponible'));};
+                document.head.appendChild(script);
+            });
+        }
+        window.openPayPalSupport = async () => {
+            if (!dialog.open) dialog.showModal();
+            if (loading || ready) return;
+            loading = true; retry.hidden = true; status.hidden = false; status.textContent = 'Cargando PayPal…';
+            try {
+                await loadSDK();
+                container.replaceChildren();
+                await window.paypal.HostedButtons({hostedButtonId:'BLSCMKBK9VWRW'}).render('#paypal-container-BLSCMKBK9VWRW');
+                ready = true; status.hidden = true;
+            } catch (error) {
+                container.replaceChildren();
+                status.textContent = 'No se pudo cargar PayPal. Comprueba tu conexión y vuelve a intentarlo.';
+                retry.hidden = false;
+            } finally {loading = false;}
+        };
+        dialog.addEventListener('click', event => {if(event.target === dialog) dialog.close();});
+        dialog.addEventListener('keydown', event => {if(event.key === 'Escape') event.stopPropagation();});
+    })();
+    </script>
+
 </body>
 </html>
